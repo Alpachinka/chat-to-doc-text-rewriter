@@ -1,6 +1,7 @@
 /* ====================================================
-   ChatToDoc — app.js
-   LaTeX/Markdown parsing → MathML → Word clipboard
+   ChatToDoc — app.js  v2.0
+   LaTeX/Markdown parsing → MathML (Word-compatible)
+   + Equations panel for Alt+= Word fallback
    ==================================================== */
 
 'use strict';
@@ -36,22 +37,23 @@ const settingSize    = document.getElementById('setting-size');
 const settingSpacing = document.getElementById('setting-spacing');
 const settingCols    = document.getElementById('setting-cols');
 
-const tabs       = document.querySelectorAll('.tab');
-const tabContents= document.querySelectorAll('.tab-content');
+const tabs        = document.querySelectorAll('.tab');
+const tabContents = document.querySelectorAll('.tab-content');
 
 const modalGuide = document.getElementById('modal-guide');
 const closeGuide = document.getElementById('close-guide');
 
-const toast      = document.getElementById('toast');
-const toastMsg   = document.getElementById('toast-message');
-const toastIcon  = document.getElementById('toast-icon');
+const toast     = document.getElementById('toast');
+const toastMsg  = document.getElementById('toast-message');
+const toastIcon = document.getElementById('toast-icon');
 
-const iconSun    = document.getElementById('icon-sun');
-const iconMoon   = document.getElementById('icon-moon');
+const iconSun  = document.getElementById('icon-sun');
+const iconMoon = document.getElementById('icon-moon');
 
 // ─── State ───────────────────────────────────────────────────────────────────
-let processedHtml     = '';  // visual HTML for screen
-let processedWordHtml = '';  // HTML with MathML for Word clipboard
+let processedHtml     = '';
+let processedWordHtml = '';
+let extractedMaths    = [];    // [{raw, display, placeholder}]
 let currentTheme      = localStorage.getItem('ctd-theme') || 'dark';
 let debounceTimer     = null;
 
@@ -71,12 +73,8 @@ function setupEventListeners() {
     debounceTimer = setTimeout(processInput, 300);
   });
 
-  // Tab switching
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-  });
+  tabs.forEach(tab => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
 
-  // Buttons
   btnCopyWord.addEventListener('click', copyForWord);
   btnDownload.addEventListener('click', downloadHtml);
   btnExample.addEventListener('click', loadExample);
@@ -87,20 +85,14 @@ function setupEventListeners() {
   closeGuide.addEventListener('click', () => { modalGuide.hidden = true; });
   modalGuide.addEventListener('click', e => { if (e.target === modalGuide) modalGuide.hidden = true; });
 
-  // Settings change → re-render word preview
   [settingFont, settingSize, settingSpacing, settingCols].forEach(el => {
     el.addEventListener('change', updateWordPreview);
   });
 
-  // Keyboard shortcut: Ctrl+Enter to copy
   inputEl.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      copyForWord();
-    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); copyForWord(); }
   });
 
-  // Escape closes modal
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && !modalGuide.hidden) modalGuide.hidden = true;
   });
@@ -111,47 +103,30 @@ function applyTheme(theme) {
   currentTheme = theme;
   document.body.setAttribute('data-theme', theme);
   localStorage.setItem('ctd-theme', theme);
-  if (theme === 'dark') {
-    iconSun.style.display  = '';
-    iconMoon.style.display = 'none';
-  } else {
-    iconSun.style.display  = 'none';
-    iconMoon.style.display = '';
-  }
+  iconSun.style.display  = theme === 'dark' ? '' : 'none';
+  iconMoon.style.display = theme === 'dark' ? 'none' : '';
 }
 function toggleTheme() { applyTheme(currentTheme === 'dark' ? 'light' : 'dark'); }
 
 // ─── TAB SWITCHING ───────────────────────────────────────────────────────────
 function switchTab(tabId) {
   tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
-  tabContents.forEach(c => {
-    c.classList.toggle('active', c.id === `content-${tabId}`);
-  });
+  tabContents.forEach(c => c.classList.toggle('active', c.id === `content-${tabId}`));
 }
 
 // ─── MATH EXTRACTION ─────────────────────────────────────────────────────────
-/**
- * Extracts LaTeX math segments from raw text before Markdown parsing.
- * Returns { cleaned: string, maths: [{placeholder, raw, display}] }
- * Supports: $$...$$, \[...\], $...$, \(...\)
- */
 function extractMath(text) {
   const maths = [];
   let idx = 0;
 
-  // Ordered patterns: display first, then inline
   const patterns = [
-    { re: /\$\$([\s\S]*?)\$\$/g,         display: true  },
-    { re: /\\\[([\s\S]*?)\\\]/g,          display: true  },
-    { re: /\\\(([\s\S]*?)\\\)/g,          display: false },
+    { re: /\$\$([\s\S]*?)\$\$/g,  display: true  },
+    { re: /\\\[([\s\S]*?)\\\]/g,  display: true  },
+    { re: /\\\(([\s\S]*?)\\\)/g,  display: false },
   ];
-
-  // Single $ — inline, but avoid currency ($5, $10) using look-around heuristics
-  // Replaced in a second pass below after block patterns
 
   let cleaned = text;
 
-  // Replace block and \(...\) patterns
   for (const { re, display } of patterns) {
     cleaned = cleaned.replace(re, (match, inner) => {
       const placeholder = `%%MATH_${idx}_${display ? 'D' : 'I'}%%`;
@@ -161,9 +136,7 @@ function extractMath(text) {
     });
   }
 
-  // Single $ inline — careful parser to avoid currency
   cleaned = parseSingleDollar(cleaned, maths, idx);
-
   return { cleaned, maths };
 }
 
@@ -173,24 +146,12 @@ function parseSingleDollar(text, maths, startIdx) {
   let i = 0;
 
   while (i < text.length) {
-    if (text[i] === '\\' && text[i + 1] === '$') {
-      // Escaped dollar — keep as literal $
-      result += '$';
-      i += 2;
-      continue;
-    }
+    if (text[i] === '\\' && text[i + 1] === '$') { result += '$'; i += 2; continue; }
 
     if (text[i] === '$') {
-      // Look for closing $
       let j = i + 1;
-      // Skip if followed by space or digit right at start (likely currency)
-      if (j < text.length && (/\s/.test(text[j]) || text[i - 1] === ' ') && /\d/.test(text[j])) {
-        result += text[i];
-        i++;
-        continue;
-      }
+      if (j < text.length && /\s/.test(text[j]) && /\d/.test(text[j])) { result += text[i]; i++; continue; }
 
-      // Find closing $
       let inner = '';
       let found = false;
       while (j < text.length) {
@@ -200,8 +161,7 @@ function parseSingleDollar(text, maths, startIdx) {
         j++;
       }
 
-      // Validate: must contain at least one LaTeX-ish character and not be pure currency
-      if (found && inner.length > 0 && inner.trim().length > 0 && !isProbablyCurrency(inner)) {
+      if (found && inner.length > 0 && !isProbablyCurrency(inner)) {
         const placeholder = `%%MATH_${idx}_I%%`;
         maths.push({ placeholder, raw: inner.trim(), display: false });
         idx++;
@@ -214,67 +174,79 @@ function parseSingleDollar(text, maths, startIdx) {
     result += text[i];
     i++;
   }
-
   return result;
 }
 
-function isProbablyCurrency(str) {
-  // Pure number with optional commas/dots → likely currency
-  return /^\d[\d,. ]*$/.test(str.trim());
-}
+function isProbablyCurrency(str) { return /^\d[\d,. ]*$/.test(str.trim()); }
 
-// ─── RENDER MATH ─────────────────────────────────────────────────────────────
+// ─── RENDER MATH — Visual (KaTeX HTML for screen) ───────────────────────────
 function renderMathVisual(raw, display) {
   try {
     const html = window.katex.renderToString(raw, {
       displayMode: display,
       output: 'html',
       throwOnError: false,
-      trust: false,
     });
     return display ? `<div class="katex-display-wrap">${html}</div>` : html;
   } catch (e) {
-    return `<span class="math-error" title="${escapeHtml(e.message)}">${escapeHtml(raw)}</span>`;
+    return `<span class="math-error">${escapeHtml(raw)}</span>`;
   }
 }
 
+// ─── RENDER MATH — Word MathML (clean, no annotation) ───────────────────────
+/**
+ * CRITICAL: KaTeX includes <annotation encoding="application/x-tex">
+ * inside a <semantics> wrapper. Word reads this annotation as PLAIN TEXT
+ * next to the equation, causing the double-output garble.
+ * We use DOMParser to safely remove it before copying to clipboard.
+ */
 function renderMathMathML(raw, display) {
   try {
-    let ml = window.katex.renderToString(raw, {
+    const mlRaw = window.katex.renderToString(raw, {
       displayMode: display,
       output: 'mathml',
       throwOnError: false,
-      trust: false,
     });
 
-    // CRITICAL FIX: Remove <annotation> elements.
-    // KaTeX adds <annotation encoding="application/x-tex">raw LaTeX here</annotation>
-    // for accessibility, but Word reads this as plain text and shows it ALONGSIDE
-    // the equation, causing the double garbled output that users see.
-    ml = ml.replace(/<annotation[^>]*>[\s\S]*?<\/annotation>/gi, '');
+    // Parse as HTML so we can safely manipulate the DOM
+    const doc = new DOMParser().parseFromString(mlRaw, 'text/html');
 
-    // Also clean up empty <semantics> if annotation was the only child
-    // (keeps the structure valid for Word's MathML parser)
-    ml = ml.replace(/<semantics>\s*(<mrow>[\s\S]*?<\/mrow>)\s*<\/semantics>/gi, '$1');
+    // 1. Remove ALL <annotation> elements — they hold raw LaTeX that Word prints as text
+    doc.querySelectorAll('annotation').forEach(a => a.remove());
 
-    // CRITICAL: Inject xmlns so Word recognizes it as a native equation.
-    // Without this namespace Word treats <math> as an unknown HTML element.
-    if (!ml.includes('xmlns=')) {
-      ml = ml.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML"');
-    }
+    // 2. Unwrap <semantics> if it now has only one meaningful child
+    doc.querySelectorAll('semantics').forEach(sem => {
+      const kids = [...sem.children];
+      if (kids.length === 1) {
+        sem.replaceWith(kids[0]);
+      }
+    });
 
-    // Add display="block" for block (display) math so Word centers the equation
-    if (display && !ml.includes('display=')) {
-      ml = ml.replace('<math', '<math display="block"');
-    }
+    // 3. Get the <math> element and set required attributes
+    const math = doc.querySelector('math');
+    if (!math) return `<span>${escapeHtml(raw)}</span>`;
 
-    // Wrap in a paragraph for block math so Word puts it on its own line
+    // xmlns MUST be present — without it Word treats <math> as unknown HTML tag
+    math.setAttribute('xmlns', 'http://www.w3.org/1998/Math/MathML');
+
+    // display="block" centers the equation in Word
+    if (display) math.setAttribute('display', 'block');
+
+    // Serialize the cleaned math element back to string
+    const serial = new XMLSerializer();
+    let ml = serial.serializeToString(math);
+
+    // XMLSerializer sometimes adds extra namespace declarations; clean them up
+    ml = ml.replace(/ xmlns:xhtml="[^"]*"/g, '');
+
+    // Wrap display equations in a centered paragraph
     if (display) {
-      ml = `<p style="text-align:center;margin:8pt 0;">${ml}</p>`;
+      return `<p style="text-align:center;margin:6pt 0;">${ml}</p>`;
     }
-
     return ml;
+
   } catch (e) {
+    console.error('MathML render error:', e);
     return `<span>${escapeHtml(raw)}</span>`;
   }
 }
@@ -284,51 +256,43 @@ function processInput() {
   const raw = inputEl.value;
   updateStats(raw);
 
-  if (!raw.trim()) {
-    setEmptyPreviews();
-    btnCopyWord.disabled = true;
-    btnDownload.disabled = true;
-    return;
-  }
+  if (!raw.trim()) { setEmptyPreviews(); btnCopyWord.disabled = true; btnDownload.disabled = true; return; }
 
-  if (typeof window.katex === 'undefined') {
-    showToast('KaTeX ще завантажується, зачекайте...', 'info');
-    return;
-  }
+  if (typeof window.katex === 'undefined') { showToast('KaTeX ще завантажується…', 'info'); return; }
 
   const { cleaned, maths } = extractMath(raw);
+  extractedMaths = maths;
 
-  // ── Visual HTML (for screen preview) ──
+  // Visual HTML for screen
   let visualHtml = parseMarkdown(cleaned);
-  visualHtml = reinjMath(visualHtml, maths, 'visual');
+  visualHtml = reinjectMath(visualHtml, maths, 'visual');
 
-  // ── Word HTML (MathML + namespaced HTML) ──
+  // Word HTML with clean MathML (no annotations)
   let wordHtml = parseMarkdown(cleaned, true);
-  wordHtml = reinjMath(wordHtml, maths, 'mathml');
+  wordHtml = reinjectMath(wordHtml, maths, 'mathml');
 
   processedHtml     = visualHtml;
   processedWordHtml = wordHtml;
 
-  // Update previews
   previewRender.innerHTML = visualHtml;
   updateWordPreview();
-  previewRaw.innerHTML = '';
   previewRaw.textContent = buildWordClipboardHtml(processedWordHtml);
+
+  // Render equations panel
+  renderEquationsPanel(maths);
 
   btnCopyWord.disabled = false;
   btnDownload.disabled = false;
 
-  // Re-run lucide icons (in case preview has none)
   if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
-function reinjMath(html, maths, mode) {
+function reinjectMath(html, maths, mode) {
   let out = html;
   for (const { placeholder, raw, display } of maths) {
     const rendered = mode === 'mathml'
       ? renderMathMathML(raw, display)
       : renderMathVisual(raw, display);
-    // Escape the placeholder for use in regex (% signs)
     const escaped = placeholder.replace(/[.*+?^${}()|[\]\\%]/g, '\\$&');
     out = out.replace(new RegExp(escaped, 'g'), rendered);
   }
@@ -337,85 +301,181 @@ function reinjMath(html, maths, mode) {
 
 // ─── MARKDOWN PARSER ─────────────────────────────────────────────────────────
 function parseMarkdown(text, forWord = false) {
-  if (typeof window.marked === 'undefined') {
-    return `<p>${escapeHtml(text)}</p>`;
-  }
+  if (typeof window.marked === 'undefined') return `<p>${escapeHtml(text)}</p>`;
 
-  // Configure marked
-  window.marked.setOptions({
-    gfm: true,
-    breaks: true,
-    headerIds: false,
-    mangle: false,
-  });
-
+  window.marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false });
   let html = window.marked.parse(text);
 
   if (forWord) {
-    // Strip script/style tags (safety)
     html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
     html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
   }
-
   return html;
 }
 
 // ─── WORD PREVIEW ────────────────────────────────────────────────────────────
 function updateWordPreview() {
   if (!processedWordHtml) return;
-  const font    = settingFont.value;
-  const size    = settingSize.value;
-  const spacing = settingSpacing.value;
-
   previewWord.innerHTML = `
-    <div style="font-family:${font}, sans-serif; font-size:${size};
-                line-height:${spacing}; color:#000; max-width:100%;">
+    <div style="font-family:${settingFont.value}, sans-serif;
+                font-size:${settingSize.value};
+                line-height:${settingSpacing.value};
+                color:#000; max-width:100%;">
       ${processedWordHtml}
     </div>`;
 }
 
+// ─── EQUATIONS PANEL ─────────────────────────────────────────────────────────
+/**
+ * Renders individual equation cards below the main layout.
+ * Each card shows the rendered equation + a "Copy LaTeX for Word" button.
+ * Users can paste each LaTeX into Word's Alt+= equation editor (guaranteed to work).
+ */
+function renderEquationsPanel(maths) {
+  let panel = document.getElementById('equations-panel');
+
+  if (!maths.length) {
+    if (panel) panel.remove();
+    return;
+  }
+
+  if (!panel) {
+    panel = document.createElement('section');
+    panel.id = 'equations-panel';
+    panel.className = 'equations-panel';
+    document.querySelector('.main-layout').after(panel);
+  }
+
+  panel.innerHTML = `
+    <div class="eq-panel-header">
+      <div class="eq-panel-title">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+        </svg>
+        <span>Формули для редактора рівнянь Word (<kbd>Alt</kbd>+<kbd>=</kbd>)</span>
+      </div>
+      <div class="eq-panel-hint">
+        Якщо вставка Ctrl+V не дала правильного результату — скопіюйте LaTeX та вставте його у полі рівняння Word
+      </div>
+    </div>
+    <div class="eq-cards">
+      ${maths.map((m, i) => `
+        <div class="eq-card">
+          <div class="eq-card-preview" id="eq-preview-${i}"></div>
+          <div class="eq-card-footer">
+            <div class="eq-card-type">${m.display ? 'Блочна формула' : 'Рядкова формула'}</div>
+            <div class="eq-card-actions">
+              <button class="btn-eq-copy" onclick="copyEqLatex(${i})" id="eq-btn-${i}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2">
+                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+                </svg>
+                Скопіювати LaTeX
+              </button>
+            </div>
+          </div>
+          <pre class="eq-latex-source">${escapeHtml(m.raw)}</pre>
+        </div>
+      `).join('')}
+    </div>`;
+
+  // Render equations visually in the cards
+  maths.forEach((m, i) => {
+    const el = document.getElementById(`eq-preview-${i}`);
+    if (!el) return;
+    try {
+      window.katex.render(m.raw, el, {
+        displayMode: true,
+        throwOnError: false,
+        output: 'html',
+      });
+    } catch(e) {
+      el.textContent = m.raw;
+    }
+  });
+}
+
+// Global handler for equation copy buttons
+window.copyEqLatex = async function(idx) {
+  if (!extractedMaths[idx]) return;
+  const latex = extractedMaths[idx].raw;
+  const btn   = document.getElementById(`eq-btn-${idx}`);
+
+  try {
+    await navigator.clipboard.writeText(latex);
+    if (btn) { btn.textContent = '✓ Скопійовано!'; setTimeout(() => { btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg> Скопіювати LaTeX`; }, 2000); }
+    showToast('LaTeX скопійовано! Вставте у Word: Alt+= → вставити → Enter', 'success');
+  } catch(e) {
+    showToast('Помилка. Скопіюйте LaTeX вручну з поля нижче.', 'error');
+  }
+};
+
 // ─── CLIPBOARD HELPERS ───────────────────────────────────────────────────────
+/**
+ * Builds Word-compatible HTML with proper Office namespace declarations.
+ * These xmlns attributes signal to Word that the HTML was generated by
+ * an Office-compatible source and it should process <math> elements.
+ */
 function buildWordClipboardHtml(bodyHtml) {
   const font    = settingFont.value;
   const size    = settingSize.value;
   const spacing = settingSpacing.value;
   const width   = settingCols.value === 'auto' ? '100%' : settingCols.value;
 
-  return `<div xmlns="http://www.w3.org/1999/xhtml"
-  style="font-family:${font}, Arial, sans-serif; font-size:${size};
-         line-height:${spacing}; color:#000000; max-width:${width};
-         margin:0; padding:0;">
+  return `<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<meta name="ProgId" content="Word.Document"/>
+<meta name="Generator" content="Microsoft Word 15"/>
+<style type="text/css">
+body, p, div, li, td, th {
+  font-family: ${font}, Arial, sans-serif;
+  font-size: ${size};
+  line-height: ${spacing};
+  color: #000000;
+}
+table { border-collapse: collapse; width: ${width}; }
+td, th { border: 1px solid #000000; padding: 4pt 8pt; }
+th { background-color: #f2f2f2; font-weight: bold; }
+h1 { font-size: 1.8em; } h2 { font-size: 1.4em; } h3 { font-size: 1.2em; }
+</style>
+</head>
+<body>
 ${bodyHtml}
-</div>`;
+</body>
+</html>`;
 }
 
 async function copyForWord() {
   if (!processedWordHtml) return;
 
-  const clipHtml = buildWordClipboardHtml(processedWordHtml);
+  const clipHtml  = buildWordClipboardHtml(processedWordHtml);
   const plainText = inputEl.value;
 
-  // Try modern Clipboard API first
   if (navigator.clipboard && window.ClipboardItem) {
     try {
-      const item = new ClipboardItem({
+      await navigator.clipboard.write([new ClipboardItem({
         'text/html':  new Blob([clipHtml],  { type: 'text/html' }),
         'text/plain': new Blob([plainText], { type: 'text/plain' }),
-      });
-      await navigator.clipboard.write([item]);
+      })]);
       showCopySuccess();
       return;
     } catch (err) {
       console.warn('Clipboard API failed:', err);
-      // Fall through to legacy method
     }
   }
 
-  // Legacy execCommand fallback
+  // Legacy fallback
   try {
     const el = document.createElement('div');
     el.innerHTML = clipHtml;
-    el.style.cssText = 'position:fixed;top:-999px;left:-999px;opacity:0;';
+    el.style.cssText = 'position:fixed;top:-9999px;left:-9999px;';
     document.body.appendChild(el);
     const sel = window.getSelection();
     const range = document.createRange();
@@ -427,46 +487,22 @@ async function copyForWord() {
     document.body.removeChild(el);
     showCopySuccess();
   } catch (err2) {
-    showToast('Помилка копіювання. Спробуйте ще раз.', 'error');
-    console.error(err2);
+    showToast('Помилка. Спробуйте кнопку "HTML файл".', 'error');
   }
 }
 
 function showCopySuccess() {
   btnCopyLbl.textContent = 'Скопійовано! ✓';
-  showToast('Текст скопійовано! Вставляйте у Word (Ctrl+V)', 'success');
+  showToast('Скопійовано! Вставте у Word (Ctrl+V). Формули не відображаються? — Використайте панель "Формули для Word" нижче.', 'success');
   setTimeout(() => { btnCopyLbl.textContent = 'Скопіювати для MS Word'; }, 3000);
 }
 
 // ─── DOWNLOAD HTML ───────────────────────────────────────────────────────────
 function downloadHtml() {
   if (!processedWordHtml) return;
-  const content = `<!DOCTYPE html>
-<html lang="uk">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Документ</title>
-  <style>
-    body { font-family: ${settingFont.value}, Arial, sans-serif;
-           font-size: ${settingSize.value}; line-height: ${settingSpacing.value};
-           color: #000; max-width: 800px; margin: 40px auto; padding: 0 20px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ccc; padding: 6px 10px; }
-    th { background: #f0f0f0; }
-    .katex-display { margin: 16px 0; }
-  </style>
-</head>
-<body>
-${buildWordClipboardHtml(processedWordHtml)}
-</body>
-</html>`;
-
-  const blob = new Blob([content], { type: 'text/html; charset=utf-8' });
+  const blob = new Blob([buildWordClipboardHtml(processedWordHtml)], { type: 'text/html; charset=utf-8' });
   const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = 'document.html';
+  const a    = Object.assign(document.createElement('a'), { href: url, download: 'document.html' });
   a.click();
   URL.revokeObjectURL(url);
   showToast('HTML-файл завантажено', 'success');
@@ -475,52 +511,41 @@ ${buildWordClipboardHtml(processedWordHtml)}
 // ─── PASTE FROM CLIPBOARD ────────────────────────────────────────────────────
 async function pasteFromClipboard() {
   try {
-    if (navigator.clipboard && navigator.clipboard.readText) {
-      const text = await navigator.clipboard.readText();
-      inputEl.value = text;
-      processInput();
-    }
-  } catch (err) {
+    const text = await navigator.clipboard.readText();
+    inputEl.value = text;
+    processInput();
+  } catch {
     showToast('Немає доступу до буферу. Вставте вручну (Ctrl+V).', 'error');
   }
 }
 
-// ─── EXAMPLE TEXT ────────────────────────────────────────────────────────────
+// ─── EXAMPLE ─────────────────────────────────────────────────────────────────
 function loadExample() {
   inputEl.value = `## Транспортна задача
 
-Мета задачі — мінімізувати **загальні витрати на перевезення**:
+Мета — мінімізувати **загальні витрати на перевезення**:
 
 $$Z = \\sum_{i=1}^{m} \\sum_{j=1}^{n} \\left( n_{ij} \\cdot t_{ij} \\cdot C_{ij} \\right) \\tag{5.2}$$
 
 де:
 - $n_{ij}$ — кількість рейсів на маршруті $i \\to j$
-- $t_{ij}$ — тривалість одного рейсу (год)
-- $C_{ij}$ — вартість одного рейсо-часу (грн/год)
+- $t_{ij}$ — тривалість рейсу (год)
+- $C_{ij}$ — вартість рейсо-часу (грн/год)
 
 ### Обмеження
 
-Баланс попиту та пропозиції:
-
 $$\\sum_{j=1}^{n} n_{ij} \\leq S_i, \\quad i = 1, \\ldots, m$$
 
-$$\\sum_{i=1}^{m} n_{ij} \\geq D_j, \\quad j = 1, \\ldots, n$$
+$$\\text{Penalty}_{\\text{Disk}} = \\min\\!\\left(20,\\, \\left\\lfloor (10.0 - \\text{FreeSpace}_{\\text{GB}}) \\times 2 \\right\\rfloor\\right)$$
 
-### Вхідні дані
+### Таблиця вхідних даних
 
 | Маршрут | $n_{ij}$ | $t_{ij}$ (год) | $C_{ij}$ (грн/год) |
 |---------|----------|----------------|---------------------|
 | A → B   | 5        | 2.5            | 120                 |
 | A → C   | 3        | 4.0            | 95                  |
-| B → C   | 7        | 1.8            | 110                 |
 
-### Формула ефективності
-
-Ефективність маршруту визначається як відношення корисного вантажу до витрат:
-
-$$\\eta = \\frac{Q_{\\text{корисний}}}{Z} = \\frac{\\sum_{ij} q_{ij}}{\\sum_{ij} n_{ij} \\cdot t_{ij} \\cdot C_{ij}}$$
-
-Рівняння Ейлера для перевірки: $e^{i\\pi} + 1 = 0$`;
+Ефективність: $\\eta = \\frac{Q_{\\text{корисний}}}{Z}$`;
 
   processInput();
   showToast('Приклад завантажено!', 'success');
@@ -530,32 +555,24 @@ $$\\eta = \\frac{Q_{\\text{корисний}}}{Z} = \\frac{\\sum_{ij} q_{ij}}{\\
 function updateStats(text) {
   statChars.textContent = text.length;
   statWords.textContent = text.trim() ? text.trim().split(/\s+/).length : 0;
-
-  // Count math blocks
-  const eqCount =
+  const eqs =
     (text.match(/\$\$[\s\S]*?\$\$/g) || []).length +
     (text.match(/\\\[[\s\S]*?\\\]/g) || []).length +
     (text.match(/\\\([\s\S]*?\\\)/g) || []).length +
     (text.match(/(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)/g) || []).length;
-  statEqs.textContent = eqCount;
+  statEqs.textContent = eqs;
 }
 
 // ─── EMPTY STATE ─────────────────────────────────────────────────────────────
 function setEmptyPreviews() {
-  const ph = (msg) => `
-    <div class="preview-placeholder">
-      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"
-           fill="none" stroke="currentColor" stroke-width="1.5">
-        <path d="m9 18 6-6-6-6"/>
-      </svg>
-      <p>${msg}</p>
-    </div>`;
-
-  previewRender.innerHTML = ph('Вставте текст зліва — тут з\'явиться попередній перегляд');
-  previewWord.innerHTML   = ph('Тут ви побачите, як текст виглядатиме у Word');
-  previewRaw.textContent  = 'HTML-код з\'явиться тут після введення тексту...';
-  processedHtml     = '';
-  processedWordHtml = '';
+  const ph = msg => `<div class="preview-placeholder"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m9 18 6-6-6-6"/></svg><p>${msg}</p></div>`;
+  previewRender.innerHTML = ph('Вставте текст зліва');
+  previewWord.innerHTML   = ph('Тут буде вигляд у Word');
+  previewRaw.textContent  = 'HTML-код з\'явиться тут...';
+  processedHtml = processedWordHtml = '';
+  extractedMaths = [];
+  const panel = document.getElementById('equations-panel');
+  if (panel) panel.remove();
   updateStats('');
 }
 
@@ -563,23 +580,15 @@ function setEmptyPreviews() {
 let toastTimer = null;
 function showToast(message, type = 'success') {
   toastMsg.textContent = message;
-  toast.className = 'toast ' + (type === 'error' ? 'error' : '');
-
-  // Icon
-  const icons = { success: 'check-circle-2', error: 'alert-circle', info: 'info' };
-  toastIcon.setAttribute('data-lucide', icons[type] || 'check-circle-2');
-  if (typeof lucide !== 'undefined') lucide.createIcons();
-
+  toast.className = 'toast' + (type === 'error' ? ' error' : '');
   toast.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove('show'), 3500);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 4500);
 }
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 function escapeHtml(str) {
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
