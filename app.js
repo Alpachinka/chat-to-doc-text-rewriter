@@ -246,13 +246,33 @@ function renderMathMathML(raw, display) {
       throwOnError: false,
       trust: false,
     });
-    // Inject required xmlns namespace so Word recognizes the equation
-    ml = ml.replace(/<math\b([^>]*)>/, (match, attrs) => {
-      if (!attrs.includes('xmlns')) {
-        return `<math xmlns="http://www.w3.org/1998/Math/MathML"${attrs}>`;
-      }
-      return match;
-    });
+
+    // CRITICAL FIX: Remove <annotation> elements.
+    // KaTeX adds <annotation encoding="application/x-tex">raw LaTeX here</annotation>
+    // for accessibility, but Word reads this as plain text and shows it ALONGSIDE
+    // the equation, causing the double garbled output that users see.
+    ml = ml.replace(/<annotation[^>]*>[\s\S]*?<\/annotation>/gi, '');
+
+    // Also clean up empty <semantics> if annotation was the only child
+    // (keeps the structure valid for Word's MathML parser)
+    ml = ml.replace(/<semantics>\s*(<mrow>[\s\S]*?<\/mrow>)\s*<\/semantics>/gi, '$1');
+
+    // CRITICAL: Inject xmlns so Word recognizes it as a native equation.
+    // Without this namespace Word treats <math> as an unknown HTML element.
+    if (!ml.includes('xmlns=')) {
+      ml = ml.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML"');
+    }
+
+    // Add display="block" for block (display) math so Word centers the equation
+    if (display && !ml.includes('display=')) {
+      ml = ml.replace('<math', '<math display="block"');
+    }
+
+    // Wrap in a paragraph for block math so Word puts it on its own line
+    if (display) {
+      ml = `<p style="text-align:center;margin:8pt 0;">${ml}</p>`;
+    }
+
     return ml;
   } catch (e) {
     return `<span>${escapeHtml(raw)}</span>`;
