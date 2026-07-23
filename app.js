@@ -100,80 +100,84 @@ function switchTab(id) {
 // MATH EXTRACTION
 // ════════════════════════════════════════════════════════════
 
+function inTable(text, index) {
+  let start = text.lastIndexOf('\n', index);
+  start = start === -1 ? 0 : start + 1;
+  let end = text.indexOf('\n', index);
+  if (end === -1) end = text.length;
+  const line = text.slice(start, end).trim();
+  return line.startsWith('|') || (line.includes('|') && line.length > 3);
+}
+
 function extractMath(text) {
   const maths = [];
   let idx = 0;
   let cleaned = text;
 
   // Block patterns first ($$...$$  and  \[...\])
-  cleaned = cleaned.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner) => {
+  cleaned = cleaned.replace(/\$\$([\s\S]*?)\$\$/g, (match, inner, offset) => {
     const ph = `%%MATH_${idx}_D%%`;
-    maths.push({ placeholder: ph, raw: inner.trim(), display: true });
+    maths.push({ placeholder: ph, raw: inner.trim(), display: true, inTable: inTable(text, offset) });
     idx++;
     return ph;
   });
-  cleaned = cleaned.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => {
+  cleaned = cleaned.replace(/\\\[([\s\S]*?)\\\]/g, (match, inner, offset) => {
     const ph = `%%MATH_${idx}_D%%`;
-    maths.push({ placeholder: ph, raw: inner.trim(), display: true });
+    maths.push({ placeholder: ph, raw: inner.trim(), display: true, inTable: inTable(text, offset) });
     idx++;
     return ph;
   });
 
   // Inline \(...\)
-  cleaned = cleaned.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => {
+  cleaned = cleaned.replace(/\\\(([\s\S]*?)\\\)/g, (match, inner, offset) => {
     const ph = `%%MATH_${idx}_I%%`;
-    maths.push({ placeholder: ph, raw: inner.trim(), display: false });
+    maths.push({ placeholder: ph, raw: inner.trim(), display: false, inTable: inTable(text, offset) });
     idx++;
     return ph;
   });
 
-  // Inline $...$ (careful with currency like $5 or $10)
-  cleaned = parseSingleDollar(cleaned, maths, idx);
+  // Inline $...$
+  cleaned = parseSingleDollar(cleaned, maths, idx, text);
 
   return { cleaned, maths };
 }
 
-function parseSingleDollar(text, maths, startIdx) {
+function parseSingleDollar(text, maths, startIdx, originalText) {
   let idx = startIdx;
   let out = '';
   let i = 0;
   while (i < text.length) {
-    // Escaped dollar — output literal $ and skip
     if (text[i] === '\\' && text[i+1] === '$') { out += '$'; i += 2; continue; }
 
     if (text[i] === '$') {
-      // === FIX: handle $NUMBER$ currency patterns ===
-      // Old code skipped only the FIRST $, leaving the SECOND $ as a
-      // stray opening that ate pipe characters from table cells.
-      // New code: scan forward; if we see $digits$, skip the WHOLE token.
-      if (i+1 < text.length && /\d/.test(text[i+1])) {
-        let end = i + 1;
-        while (end < text.length && /[\d,. ]/.test(text[end])) end++;
-        if (end < text.length && text[end] === '$') {
-          // e.g. $0$, $1$, $42$, $3.50$ — skip entire token as plain text
-          out += text.slice(i, end + 1);
-          i = end + 1;
-        } else {
-          // $5 with no closing dollar — output just the $ char
-          out += text[i]; i++;
-        }
-        continue;
+      // Inline math must not have space immediately after opening $
+      if (i + 1 < text.length && /[ \t\n]/.test(text[i+1])) {
+        out += '$'; i++; continue;
       }
 
-      // Normal inline math: find the closing $
       let j = i + 1;
       let inner = '';
       let found = false;
       while (j < text.length) {
         if (text[j] === '\\' && text[j+1] === '$') { inner += '$'; j += 2; continue; }
-        if (text[j] === '$') { found = true; break; }
-        if (text[j] === '\n') break; // no multiline inline math
+        if (text[j] === '$') {
+          // Must not have space immediately before closing $
+          if (/[ \t\n]/.test(text[j-1])) { inner += '$'; j++; continue; }
+          // Must not be followed immediately by a digit (prevents "$5 and $10" matching)
+          if (j + 1 < text.length && /\d/.test(text[j+1])) { inner += '$'; j++; continue; }
+          
+          found = true; 
+          break; 
+        }
+        if (text[j] === '\n') break;
         inner += text[j];
         j++;
       }
-      if (found && inner.trim().length > 0 && !isProbablyCurrency(inner)) {
+
+      if (found && inner.length > 0) {
         const ph = `%%MATH_${idx}_I%%`;
-        maths.push({ placeholder: ph, raw: inner.trim(), display: false });
+        // We use 'i' to check table context in the current cleaned string
+        maths.push({ placeholder: ph, raw: inner.trim(), display: false, inTable: inTable(text, i) });
         idx++;
         out += ph;
         i = j + 1;
@@ -355,54 +359,84 @@ function updateWordPreview() {
 
 // ─── EQUATIONS PANEL ─────────────────────────────────────────────────────────
 function renderEquationsPanel(maths) {
-  // Remove existing panel
   const old = document.getElementById('eq-panel');
   if (old) old.remove();
 
   if (!maths.length) return;
 
+  const mainMaths = maths.filter(m => !m.inTable);
+  const tableMaths = maths.filter(m => m.inTable);
+
   const section = document.createElement('section');
   section.id = 'eq-panel';
   section.className = 'equations-panel';
 
-  section.innerHTML = `
-    <div class="eq-panel-header">
-      <div class="eq-panel-title">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-        </svg>
-        <span>Формули окремо — для вставки через <kbd>Alt</kbd>+<kbd>=</kbd> у Word</span>
-      </div>
-      <div class="eq-panel-hint">
-        Якщо Ctrl+V вставляє символи замість формул — використовуйте цей спосіб: Alt+= → вставити LaTeX → пробіл
-      </div>
-    </div>
-    <div class="eq-cards">
-      ${maths.map((m, i) => `
-        <div class="eq-card">
-          <div class="eq-card-preview" id="eqprev-${i}"></div>
-          <div class="eq-card-footer">
-            <span class="eq-card-type">${m.display ? 'Блочна' : 'Рядкова'}</span>
-            <button class="btn-eq-copy" id="eqbtn-${i}" onclick="window.copyEqLatex(${i})">
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
-                   fill="none" stroke="currentColor" stroke-width="2">
-                <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
-                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
-              </svg>
-              Скопіювати LaTeX
-            </button>
-          </div>
-          <pre class="eq-latex-source">${escapeHtml(m.raw)}</pre>
+  const renderCards = (list) => list.map(m => {
+    // Find the original index for the copy button
+    const originalIdx = maths.indexOf(m);
+    return `
+      <div class="eq-card">
+        <div class="eq-card-preview" id="eqprev-${originalIdx}"></div>
+        <div class="eq-card-footer">
+          <span class="eq-card-type">${m.display ? 'Блочна' : 'Рядкова'}</span>
+          <button class="btn-eq-copy" id="eqbtn-${originalIdx}" onclick="window.copyEqLatex(${originalIdx})">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2">
+              <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+            </svg>
+            Скопіювати LaTeX
+          </button>
         </div>
-      `).join('')}
-    </div>`;
+        <pre class="eq-latex-source">${escapeHtml(m.raw)}</pre>
+      </div>
+    `;
+  }).join('');
 
-  // Insert after .main-layout
+  let html = '';
+
+  if (mainMaths.length > 0) {
+    html += `
+      <div class="eq-panel-header">
+        <div class="eq-panel-title">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+          <span>Основні формули</span>
+        </div>
+        <div class="eq-panel-hint">
+          Для вставки через Alt+= у Word (якщо Ctrl+V вставляє символи)
+        </div>
+      </div>
+      <div class="eq-cards">${renderCards(mainMaths)}</div>
+    `;
+  }
+
+  if (tableMaths.length > 0) {
+    html += `
+      <div class="eq-panel-header" style="${mainMaths.length > 0 ? 'margin-top: 32px;' : ''}">
+        <div class="eq-panel-title">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2">
+            <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
+          </svg>
+          <span>Формули з таблиць</span>
+        </div>
+        <div class="eq-panel-hint">
+          Іноді в комірках таблиць бувають формули. Ви можете скопіювати їх окремо за потреби.
+        </div>
+      </div>
+      <div class="eq-cards">${renderCards(tableMaths)}</div>
+    `;
+  }
+
+  section.innerHTML = html;
+
   const mainLayout = document.querySelector('.main-layout');
   mainLayout.after(section);
 
-  // Render each equation visually, then auto-scale if wider than the card
+  // Render visual equations
   maths.forEach((m, i) => {
     const el = document.getElementById(`eqprev-${i}`);
     if (!el) return;
@@ -413,17 +447,15 @@ function renderEquationsPanel(maths) {
       return;
     }
 
-    // After browser paints, shrink the equation if it overflows its container
     requestAnimationFrame(() => {
       const inner = el.querySelector('.katex-display') || el.querySelector('.katex');
       if (!inner) return;
-      const containerW = el.clientWidth - 12;  // 12px safety margin for padding
+      const containerW = el.clientWidth - 12;
       const contentW   = inner.scrollWidth;
       if (contentW > containerW && containerW > 0) {
         const scale = Math.max(0.40, containerW / contentW);
         inner.style.transformOrigin = 'center center';
         inner.style.transform       = `scale(${scale.toFixed(3)})`;
-        // CSS transform doesn't affect layout height, so fix it manually
         inner.style.marginTop    = `${((scale - 1) / 2) * inner.offsetHeight}px`;
         inner.style.marginBottom = inner.style.marginTop;
       }
