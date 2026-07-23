@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatToDoc — Вставка формул у Word без зайвих символів</title>
+  <meta name="description" content="Конвертуйте текст із формулами LaTeX від чат-ботів (ChatGPT, Claude, Gemini) у формат, який ідеально вставляється в Microsoft Word як редаговані рівняння." />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+
+  <!-- Marked.js -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-theme="dark">
+
+  <!-- ===== HEADER ===== -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <div class="logo-icon">
+          <i data-lucide="file-text"></i>
+        </div>
+        <div class="logo-text">
+          <span class="logo-title">ChatToDoc</span>
+          <span class="logo-sub">LaTeX → Word</span>
+        </div>
+      </div>
+
+      <nav class="header-nav">
+        <button id="btn-example" class="btn-ghost" title="Завантажити приклад">
+          <i data-lucide="flask-conical"></i>
+          <span>Приклад</span>
+        </button>
+        <button id="btn-guide" class="btn-ghost" title="Як вставити у Word?">
+          <i data-lucide="book-open"></i>
+          <span>Інструкція</span>
+        </button>
+        <button id="btn-theme" class="btn-ghost icon-only" title="Змінити тему">
+          <i data-lucide="sun" id="icon-sun"></i>
+          <i data-lucide="moon" id="icon-moon" style="display:none"></i>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ===== HERO STRIP ===== -->
+  <div class="hero-strip">
+    <div class="hero-inner">
+      <div class="hero-badge">
+        <i data-lucide="sparkles"></i>
+        <span>Підтримує LaTeX, Markdown, таблиці</span>
+      </div>
+      <h1 class="hero-title">Скопіюй текст із чат-бота — вставляй у Word без зусиль</h1>
+      <p class="hero-desc">Вставте текст із ChatGPT, Claude або Gemini, натисніть кнопку — і формули у Word стануть рідними редагованими рівняннями.</p>
+    </div>
+  </div>
+
+  <!-- ===== MAIN LAYOUT ===== -->
+  <main class="main-layout">
+
+    <!-- ===== LEFT PANEL — INPUT ===== -->
+    <section class="panel panel-input">
+      <div class="panel-header">
+        <div class="panel-title">
+          <i data-lucide="pencil-line"></i>
+          <span>Вхідний текст</span>
+        </div>
+        <div class="panel-actions-top">
+          <button id="btn-clear" class="btn-ghost icon-only small" title="Очистити">
+            <i data-lucide="x"></i>
+          </button>
+          <button id="btn-paste" class="btn-ghost small" title="Вставити з буферу">
+            <i data-lucide="clipboard"></i>
+            <span>Вставити</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="textarea-wrapper">
+        <textarea id="input-text"
+          placeholder="Вставте сюди текст із чат-бота... &#10;&#10;Підтримуються:&#10;• Формули LaTeX: $x^2 + y^2 = z^2$&#10;• Блочні формули: $$\sum_{i=1}^{n} x_i$$&#10;• Markdown заголовки, списки, таблиці&#10;• Жирний **текст** та _курсив_"
+          spellcheck="false"
+          id="input-text"
+        ></textarea>
+        <div class="textarea-overlay" id="input-highlight" aria-hidden="true"></div>
+      </div>
+
+      <!-- Stats bar -->
+      <div class="stats-bar">
+        <div class="stat">
+          <i data-lucide="type"></i>
+          <span id="stat-chars">0</span>
+          <span>симв.</span>
+        </div>
+        <div class="stat">
+          <i data-lucide="align-left"></i>
+          <span id="stat-words">0</span>
+          <span>слів</span>
+        </div>
+        <div class="stat accent">
+          <i data-lucide="sigma"></i>
+          <span id="stat-eqs">0</span>
+          <span>формул</span>
+        </div>
+      </div>
+
+      <!-- Settings card -->
+      <div class="settings-card">
+        <div class="settings-title">
+          <i data-lucide="settings-2"></i>
+          <span>Налаштування документа Word</span>
+        </div>
+        <div class="settings-grid">
+          <label class="setting-item">
+            <span class="setting-label">Шрифт</span>
+            <select id="setting-font" class="setting-control">
+              <option value="Calibri">Calibri</option>
+              <option value="Arial">Arial</option>
+              <option value="Times New Roman">Times New Roman</option>
+              <option value="Georgia">Georgia</option>
+              <option value="Segoe UI">Segoe UI</option>
+              <option value="Verdana">Verdana</option>
+            </select>
+          </label>
+          <label class="setting-item">
+            <span class="setting-label">Розмір</span>
+            <select id="setting-size" class="setting-control">
+              <option value="10pt">10pt</option>
+              <option value="11pt" selected>11pt</option>
+              <option value="12pt">12pt</option>
+              <option value="14pt">14pt</option>
+              <option value="16pt">16pt</option>
+            </select>
+          </label>
+          <label class="setting-item">
+            <span class="setting-label">Міжрядковий</span>
+            <select id="setting-spacing" class="setting-control">
+              <option value="1.0">1.0</option>
+              <option value="1.15" selected>1.15</option>
+              <option value="1.5">1.5</option>
+              <option value="2.0">2.0</option>
+            </select>
+          </label>
+          <label class="setting-item">
+            <span class="setting-label">Колонки</span>
+            <select id="setting-cols" class="setting-control">
+              <option value="auto" selected>Автоматично</option>
+              <option value="100%">На всю ширину</option>
+              <option value="80%">80%</option>
+              <option value="60%">60%</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== RIGHT PANEL — PREVIEW & ACTIONS ===== -->
+    <section class="panel panel-preview">
+      <div class="panel-header">
+        <div class="tab-bar">
+          <button class="tab active" data-tab="rendered" id="tab-rendered">
+            <i data-lucide="eye"></i>
+            <span>Перегляд</span>
+          </button>
+          <button class="tab" data-tab="word" id="tab-word">
+            <i data-lucide="file-type-2"></i>
+            <span>Вигляд у Word</span>
+          </button>
+          <button class="tab" data-tab="raw" id="tab-raw">
+            <i data-lucide="code-2"></i>
+            <span>HTML код</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Rendered tab -->
+      <div class="tab-content active" id="content-rendered">
+        <div class="preview-pane" id="preview-rendered">
+          <div class="preview-placeholder">
+            <i data-lucide="arrow-left-to-line"></i>
+            <p>Вставте текст зліва — тут з'явиться попередній перегляд</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Word view tab -->
+      <div class="tab-content" id="content-word">
+        <div class="preview-pane word-pane" id="preview-word">
+          <div class="preview-placeholder">
+            <i data-lucide="arrow-left-to-line"></i>
+            <p>Тут ви побачите, як текст виглядатиме у Word</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Raw HTML tab -->
+      <div class="tab-content" id="content-raw">
+        <pre class="raw-code" id="preview-raw"><code>HTML-код з'явиться тут після введення тексту...</code></pre>
+      </div>
+
+      <!-- === ACTION STRIP === -->
+      <div class="action-strip">
+        <button id="btn-copy-word" class="btn-primary" disabled>
+          <span class="btn-glow"></span>
+          <i data-lucide="copy"></i>
+          <span id="btn-copy-label">Скопіювати для MS Word</span>
+        </button>
+        <button id="btn-download" class="btn-secondary" disabled title="Завантажити HTML-файл (запасний варіант)">
+          <i data-lucide="download"></i>
+          <span>HTML файл</span>
+        </button>
+      </div>
+
+      <!-- === COPY METHOD INFO === -->
+      <div class="copy-info" id="copy-info">
+        <i data-lucide="info"></i>
+        <span>Після копіювання відкрийте Word і натисніть <kbd>Ctrl</kbd>+<kbd>V</kbd></span>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== GUIDE MODAL ===== -->
+  <div class="modal-overlay" id="modal-guide" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">
+          <i data-lucide="book-open"></i>
+          Як вставити у Microsoft Word?
+        </h2>
+        <button class="btn-ghost icon-only" id="close-guide">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="guide-steps">
+          <div class="guide-step">
+            <div class="step-num">1</div>
+            <div class="step-content">
+              <h3>Вставте текст із чат-бота</h3>
+              <p>Скопіюйте відповідь із ChatGPT, Claude, Gemini чи будь-якого іншого чат-бота та вставте її у поле ліворуч.</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="step-num">2</div>
+            <div class="step-content">
+              <h3>Налаштуйте шрифт та розмір</h3>
+              <p>Оберіть шрифт (Calibri, Arial тощо), розмір та міжрядковий інтервал, щоб вони відповідали вашому документу Word.</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="step-num">3</div>
+            <div class="step-content">
+              <h3>Натисніть «Скопіювати для MS Word»</h3>
+              <p>Натисніть синю кнопку. Текст разом із формулами у форматі MathML буде скопійовано у буфер обміну.</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <h3>Вставте у Microsoft Word</h3>
+              <p>Відкрийте Word і натисніть <kbd>Ctrl</kbd>+<kbd>V</kbd>. Формули перетворяться на рідні рівняння Word, які можна редагувати!</p>
+              <div class="tip-box">
+                <i data-lucide="lightbulb"></i>
+                <div>
+                  <strong>Якщо формули показуються як код:</strong> одразу після вставки натисніть маленьку іконку вставки (або <kbd>Ctrl</kbd>), оберіть <em>«Зберегти лише текст»</em>, або вставте у поле рівняння (<kbd>Alt</kbd>+<kbd>=</kbd>).
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="guide-formats">
+          <h3>Підтримувані формати LaTeX</h3>
+          <div class="format-grid">
+            <div class="format-item">
+              <div class="format-code">$x + y = z$</div>
+              <div class="format-label">Рядкова формула</div>
+            </div>
+            <div class="format-item">
+              <div class="format-code">$$\frac{a}{b}$$</div>
+              <div class="format-label">Блочна формула</div>
+            </div>
+            <div class="format-item">
+              <div class="format-code">\( e^{i\pi} \)</div>
+              <div class="format-label">Рядкова (альт.)</div>
+            </div>
+            <div class="format-item">
+              <div class="format-code">\[ \sum_{i=1}^n \]</div>
+              <div class="format-label">Блочна (альт.)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== TOAST NOTIFICATION ===== -->
+  <div class="toast" id="toast" aria-live="polite">
+    <i data-lucide="check-circle-2" id="toast-icon"></i>
+    <span id="toast-message">Скопійовано!</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
