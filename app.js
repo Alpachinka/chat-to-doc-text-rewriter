@@ -387,7 +387,7 @@ function renderEquationsPanel(maths) {
   const mainLayout = document.querySelector('.main-layout');
   mainLayout.after(section);
 
-  // Render each equation visually
+  // Render each equation visually, then auto-scale if wider than the card
   maths.forEach((m, i) => {
     const el = document.getElementById(`eqprev-${i}`);
     if (!el) return;
@@ -395,7 +395,24 @@ function renderEquationsPanel(maths) {
       katex.render(m.raw, el, { displayMode: true, throwOnError: false, output: 'html' });
     } catch (e) {
       el.textContent = m.raw;
+      return;
     }
+
+    // After browser paints, shrink the equation if it overflows its container
+    requestAnimationFrame(() => {
+      const inner = el.querySelector('.katex-display') || el.querySelector('.katex');
+      if (!inner) return;
+      const containerW = el.clientWidth - 12;  // 12px safety margin for padding
+      const contentW   = inner.scrollWidth;
+      if (contentW > containerW && containerW > 0) {
+        const scale = Math.max(0.40, containerW / contentW);
+        inner.style.transformOrigin = 'center center';
+        inner.style.transform       = `scale(${scale.toFixed(3)})`;
+        // CSS transform doesn't affect layout height, so fix it manually
+        inner.style.marginTop    = `${((scale - 1) / 2) * inner.offsetHeight}px`;
+        inner.style.marginBottom = inner.style.marginTop;
+      }
+    });
   });
 }
 
@@ -516,30 +533,33 @@ async function pasteClipboard() {
 
 // ─── EXAMPLE ─────────────────────────────────────────────────────────────────
 function loadExample() {
-  inputEl.value = `## Транспортна задача
+  inputEl.value = `## Математичний аналіз — приклад
 
-Мета — мінімізувати **загальні витрати на перевезення** (формула 5.2):
+Корені квадратного рівняння $ax^2 + bx + c = 0$ визначаються за **формулою**:
 
-$$Z = \\sum_{i=1}^{m} \\sum_{j=1}^{n} \\left( n_{ij} \\cdot t_{ij} \\cdot C_{ij} \\right)$$
+$$x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
 
-де $n_{ij}$ — кількість рейсів, $t_{ij}$ — тривалість (год), $C_{ij}$ — вартість (грн/год).
+де $D = b^2 - 4ac$ — дискримінант. Якщо $D > 0$ — два різних корені, якщо $D = 0$ — один.
 
-### Обмеження задачі
+### Ряд Тейлора
 
-$$\\sum_{j=1}^{n} n_{ij} \\leq S_i, \\quad \\forall\\, i = 1, \\ldots, m$$
+Функція $e^x$ розкладається у збіжний степеневий ряд:
 
-Штраф за нестачу місця на диску:
+$$e^x = \\sum_{n=0}^{\\infty} \\frac{x^n}{n!} = 1 + x + \\frac{x^2}{2!} + \\frac{x^3}{3!} + \\cdots$$
 
-$$\\text{Penalty}_{\\text{Disk}} = \\min\\!\\left(20,\\, \\left\\lfloor (10{,}0 - \\text{FreeSpace}_{\\text{GB}}) \\times 2 \\right\\rfloor\\right)$$
+### Інтегральне числення
 
-### Таблиця
+Основна теорема аналізу (формула Ньютона–Лейбніца):
 
-| Маршрут | $n_{ij}$ | $t_{ij}$ (год) | $C_{ij}$ (грн/год) |
-|---------|----------|----------------|---------------------|
-| A → B   | 5        | 2.5            | 120                 |
-| A → C   | 3        | 4.0            | 95                  |
+$$\\int_a^b f(x)\\,dx = F(b) - F(a), \\quad \\text{де } F'(x) = f(x)$$
 
-Рівняння Ейлера: $e^{i\\pi} + 1 = 0$`;
+### Таблиця значень $\\sin(x)$
+
+| $x$ | $0$ | $\\pi/6$ | $\\pi/4$ | $\\pi/3$ | $\\pi/2$ |
+|-----|-----|---------|---------|---------|--------|
+| $\\sin x$ | $0$ | $\\tfrac{1}{2}$ | $\\tfrac{\\sqrt{2}}{2}$ | $\\tfrac{\\sqrt{3}}{2}$ | $1$ |
+
+Формула Ейлера: $e^{i\\pi} + 1 = 0$`;
 
   processInput();
   showToast('Приклад завантажено!', 'success');

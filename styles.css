@@ -868,12 +868,23 @@ kbd {
 .eq-card:last-child { border-right: none; }
 
 .eq-card-preview {
-  min-height: 48px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow-x: auto;
-  padding: 8px 0;
+  overflow: hidden;           /* NO scrollbar — content is scaled via JS */
+  padding: 10px 6px;
+}
+
+/* Override KaTeX's own overflow-x:auto so it never shows a scrollbar inside the card */
+.eq-card-preview .katex-display {
+  overflow: visible !important;
+  margin: 0 !important;
+  text-align: center;
+}
+.eq-card-preview .katex {
+  display: inline-block;
+  max-width: 100%;
 }
 
 .eq-card-footer {
@@ -923,11 +934,13 @@ kbd {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  overflow-x: auto;
+  overflow: hidden;           /* NO scrollbar */
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;     /* break long tokens gracefully */
+  overflow-wrap: break-word;
   line-height: 1.5;
   user-select: all;
+  max-height: 80px;           /* prevent very long LaTeX from dominating the card */
 }
 
 @media (max-width: 900px) {
