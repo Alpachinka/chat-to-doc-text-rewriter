@@ -444,22 +444,7 @@ function renderEquationsPanel(maths) {
       katex.render(m.raw, el, { displayMode: true, throwOnError: false, output: 'html' });
     } catch (e) {
       el.textContent = m.raw;
-      return;
     }
-
-    requestAnimationFrame(() => {
-      const inner = el.querySelector('.katex-display') || el.querySelector('.katex');
-      if (!inner) return;
-      const containerW = el.clientWidth - 12;
-      const contentW   = inner.scrollWidth;
-      if (contentW > containerW && containerW > 0) {
-        const scale = Math.max(0.40, containerW / contentW);
-        inner.style.transformOrigin = 'center center';
-        inner.style.transform       = `scale(${scale.toFixed(3)})`;
-        inner.style.marginTop    = `${((scale - 1) / 2) * inner.offsetHeight}px`;
-        inner.style.marginBottom = inner.style.marginTop;
-      }
-    });
   });
 }
 

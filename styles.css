@@ -871,20 +871,25 @@ kbd {
   min-height: 64px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  overflow: hidden;           /* NO scrollbar — content is scaled via JS */
-  padding: 10px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 10px 16px;
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+.eq-card-preview::-webkit-scrollbar {
+  display: none;             /* Chrome, Safari, Edge */
 }
 
 /* Override KaTeX's own overflow-x:auto so it never shows a scrollbar inside the card */
 .eq-card-preview .katex-display {
   overflow: visible !important;
-  margin: 0 !important;
+  margin: 0 auto !important; /* Centers the equation safely in flex container */
   text-align: center;
 }
 .eq-card-preview .katex {
   display: inline-block;
-  max-width: 100%;
+  margin: 0 auto;
 }
 
 .eq-card-footer {
