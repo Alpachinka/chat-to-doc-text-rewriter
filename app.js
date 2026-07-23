@@ -138,21 +138,36 @@ function parseSingleDollar(text, maths, startIdx) {
   let out = '';
   let i = 0;
   while (i < text.length) {
-    // Escaped dollar
+    // Escaped dollar — output literal $ and skip
     if (text[i] === '\\' && text[i+1] === '$') { out += '$'; i += 2; continue; }
 
     if (text[i] === '$') {
-      // Skip currency: $5, $10 etc. (digit right after $)
-      if (i+1 < text.length && /\d/.test(text[i+1])) { out += text[i]; i++; continue; }
+      // === FIX: handle $NUMBER$ currency patterns ===
+      // Old code skipped only the FIRST $, leaving the SECOND $ as a
+      // stray opening that ate pipe characters from table cells.
+      // New code: scan forward; if we see $digits$, skip the WHOLE token.
+      if (i+1 < text.length && /\d/.test(text[i+1])) {
+        let end = i + 1;
+        while (end < text.length && /[\d,. ]/.test(text[end])) end++;
+        if (end < text.length && text[end] === '$') {
+          // e.g. $0$, $1$, $42$, $3.50$ — skip entire token as plain text
+          out += text.slice(i, end + 1);
+          i = end + 1;
+        } else {
+          // $5 with no closing dollar — output just the $ char
+          out += text[i]; i++;
+        }
+        continue;
+      }
 
-      // Find closing $
+      // Normal inline math: find the closing $
       let j = i + 1;
       let inner = '';
       let found = false;
       while (j < text.length) {
         if (text[j] === '\\' && text[j+1] === '$') { inner += '$'; j += 2; continue; }
         if (text[j] === '$') { found = true; break; }
-        if (text[j] === '\n') break; // no multiline inline
+        if (text[j] === '\n') break; // no multiline inline math
         inner += text[j];
         j++;
       }
