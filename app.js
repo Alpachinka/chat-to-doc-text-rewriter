@@ -1,7 +1,7 @@
 /* ====================================================
-   ChatToDoc — app.js  v3.0
+   ChatToDoc — app.js  v3.1
    Robust fix: string-split annotation removal,
-   marked v12 compatible, full error handling
+   marked v12 compatible, plain-text formula auto-conversion
    ==================================================== */
 
 'use strict';
@@ -14,48 +14,51 @@ function waitForKatex(cb, tries = 0) {
 }
 
 // ─── DOM refs ────────────────────────────────────────────────────────────────
-const inputEl       = document.getElementById('input-text');
-const previewRender = document.getElementById('preview-rendered');
-const previewWord   = document.getElementById('preview-word');
-const previewRaw    = document.getElementById('preview-raw');
-const statChars     = document.getElementById('stat-chars');
-const statWords     = document.getElementById('stat-words');
-const statEqs       = document.getElementById('stat-eqs');
-const btnCopyWord   = document.getElementById('btn-copy-word');
-const btnCopyLbl    = document.getElementById('btn-copy-label');
-const btnDownload   = document.getElementById('btn-download');
-const btnExample    = document.getElementById('btn-example');
-const btnGuide      = document.getElementById('btn-guide');
-const btnClear      = document.getElementById('btn-clear');
-const btnPaste      = document.getElementById('btn-paste');
-const btnTheme      = document.getElementById('btn-theme');
-const settingFont    = document.getElementById('setting-font');
-const settingSize    = document.getElementById('setting-size');
-const settingSpacing = document.getElementById('setting-spacing');
-const settingCols    = document.getElementById('setting-cols');
-const tabs           = document.querySelectorAll('.tab');
-const tabContents    = document.querySelectorAll('.tab-content');
-const modalGuide     = document.getElementById('modal-guide');
-const closeGuide     = document.getElementById('close-guide');
-const toast          = document.getElementById('toast');
-const toastMsg       = document.getElementById('toast-message');
-const iconSun        = document.getElementById('icon-sun');
-const iconMoon       = document.getElementById('icon-moon');
+const inputEl          = document.getElementById('input-text');
+const previewRender    = document.getElementById('preview-rendered');
+const previewWord      = document.getElementById('preview-word');
+const previewRaw       = document.getElementById('preview-raw');
+const statChars        = document.getElementById('stat-chars');
+const statWords        = document.getElementById('stat-words');
+const statEqs          = document.getElementById('stat-eqs');
+const btnCopyWord      = document.getElementById('btn-copy-word');
+const btnCopyLbl       = document.getElementById('btn-copy-label');
+const btnDownload      = document.getElementById('btn-download');
+const btnExample       = document.getElementById('btn-example');
+const btnGuide         = document.getElementById('btn-guide');
+const btnClear         = document.getElementById('btn-clear');
+const btnPaste         = document.getElementById('btn-paste');
+const btnTheme         = document.getElementById('btn-theme');
+const settingFont      = document.getElementById('setting-font');
+const settingSize      = document.getElementById('setting-size');
+const settingSpacing   = document.getElementById('setting-spacing');
+const settingCols      = document.getElementById('setting-cols');
+const settingAutoPlain = document.getElementById('setting-auto-plain');
+const tabs             = document.querySelectorAll('.tab');
+const tabContents      = document.querySelectorAll('.tab-content');
+const modalGuide       = document.getElementById('modal-guide');
+const closeGuide       = document.getElementById('close-guide');
+const toast            = document.getElementById('toast');
+const toastMsg         = document.getElementById('toast-message');
+const iconSun          = document.getElementById('icon-sun');
+const iconMoon         = document.getElementById('icon-moon');
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let processedHtml     = '';
 let processedWordHtml = '';
 let extractedMaths    = [];
 let currentTheme      = localStorage.getItem('ctd-theme') || 'dark';
+let autoPlainEnabled  = localStorage.getItem('ctd-auto-plain') !== 'false';
 let debounceTimer     = null;
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
+  if (settingAutoPlain) settingAutoPlain.checked = autoPlainEnabled;
   waitForKatex(() => {
     setupListeners();
     if (typeof lucide !== 'undefined') lucide.createIcons();
-    console.log('[ChatToDoc] Ready. KaTeX:', typeof katex, 'Marked:', typeof marked);
+    console.log('[ChatToDoc] Ready. KaTeX:', typeof katex, 'Marked:', typeof marked, 'PlainMath:', typeof window.PlainMath);
   });
 });
 
@@ -76,6 +79,13 @@ function setupListeners() {
   closeGuide.addEventListener('click', () => { modalGuide.hidden = true; });
   modalGuide.addEventListener('click', e => { if (e.target === modalGuide) modalGuide.hidden = true; });
   [settingFont, settingSize, settingSpacing, settingCols].forEach(el => el.addEventListener('change', updateWordPreview));
+  if (settingAutoPlain) {
+    settingAutoPlain.addEventListener('change', () => {
+      autoPlainEnabled = settingAutoPlain.checked;
+      localStorage.setItem('ctd-auto-plain', String(autoPlainEnabled));
+      processInput();
+    });
+  }
   inputEl.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); copyForWord(); } });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modalGuide.hidden) modalGuide.hidden = true; });
 }
@@ -115,34 +125,43 @@ function extractMath(text) {
   let cleaned = text;
 
   // Block patterns first ($$...$$  and  \[...\])
-  cleaned = cleaned.replace(/\$\$([\s\S]*?)\$\$/g, (match, inner, offset) => {
+  cleaned = cleaned.replace(/\$\$([\s\S]*?)\$\$/g, (match, inner, offset, str) => {
     const ph = `%%MATH_${idx}_D%%`;
-    maths.push({ placeholder: ph, raw: inner.trim(), display: true, inTable: inTable(text, offset) });
+    maths.push({ placeholder: ph, raw: inner.trim(), display: true, inTable: inTable(str, offset) });
     idx++;
     return ph;
   });
-  cleaned = cleaned.replace(/\\\[([\s\S]*?)\\\]/g, (match, inner, offset) => {
+  cleaned = cleaned.replace(/\\\[([\s\S]*?)\\\]/g, (match, inner, offset, str) => {
     const ph = `%%MATH_${idx}_D%%`;
-    maths.push({ placeholder: ph, raw: inner.trim(), display: true, inTable: inTable(text, offset) });
+    maths.push({ placeholder: ph, raw: inner.trim(), display: true, inTable: inTable(str, offset) });
     idx++;
     return ph;
   });
 
   // Inline \(...\)
-  cleaned = cleaned.replace(/\\\(([\s\S]*?)\\\)/g, (match, inner, offset) => {
+  cleaned = cleaned.replace(/\\\(([\s\S]*?)\\\)/g, (match, inner, offset, str) => {
     const ph = `%%MATH_${idx}_I%%`;
-    maths.push({ placeholder: ph, raw: inner.trim(), display: false, inTable: inTable(text, offset) });
+    maths.push({ placeholder: ph, raw: inner.trim(), display: false, inTable: inTable(str, offset) });
     idx++;
     return ph;
   });
 
   // Inline $...$
-  cleaned = parseSingleDollar(cleaned, maths, idx, text);
+  const singleRes = parseSingleDollar(cleaned, maths, idx);
+  cleaned = singleRes.out;
+  idx = singleRes.nextIdx;
+
+  // Plain-text / Unicode symbolic formulas (auto-conversion)
+  if (autoPlainEnabled && typeof window.PlainMath !== 'undefined') {
+    const plainRes = window.PlainMath.extractPlainMath(cleaned, maths, idx);
+    cleaned = plainRes.cleaned;
+    idx = plainRes.nextIdx;
+  }
 
   return { cleaned, maths };
 }
 
-function parseSingleDollar(text, maths, startIdx, originalText) {
+function parseSingleDollar(text, maths, startIdx) {
   let idx = startIdx;
   let out = '';
   let i = 0;
@@ -165,9 +184,9 @@ function parseSingleDollar(text, maths, startIdx, originalText) {
           if (/[ \t\n]/.test(text[j-1])) { inner += '$'; j++; continue; }
           // Must not be followed immediately by a digit (prevents "$5 and $10" matching)
           if (j + 1 < text.length && /\d/.test(text[j+1])) { inner += '$'; j++; continue; }
-          
-          found = true; 
-          break; 
+
+          found = true;
+          break;
         }
         if (text[j] === '\n') break;
         inner += text[j];
@@ -186,7 +205,7 @@ function parseSingleDollar(text, maths, startIdx, originalText) {
     }
     out += text[i]; i++;
   }
-  return out;
+  return { out, nextIdx: idx };
 }
 
 function isProbablyCurrency(s) { return /^\s*[\d,. ]+\s*$/.test(s); }
@@ -196,9 +215,10 @@ function isProbablyCurrency(s) { return /^\s*[\d,. ]+\s*$/.test(s); }
 // ════════════════════════════════════════════════════════════
 
 // Visual HTML (KaTeX HTML for screen preview)
-function renderVisual(raw, display) {
+function renderVisual(raw, display, trailingPunct = '') {
   try {
-    return katex.renderToString(raw, { displayMode: display, output: 'html', throwOnError: false });
+    const tex = display && trailingPunct ? `${raw}${trailingPunct}` : raw;
+    return katex.renderToString(tex, { displayMode: display, output: 'html', throwOnError: false });
   } catch(e) {
     return `<span class="math-error" title="${escapeHtml(String(e))}">${escapeHtml(raw)}</span>`;
   }
@@ -216,7 +236,7 @@ function renderVisual(raw, display) {
  *
  * We use string-splitting (not regex, not DOMParser) to reliably remove it.
  */
-function renderMathML(raw, display) {
+function renderMathML(raw, display, trailingPunct = '') {
   try {
     let ml = katex.renderToString(raw, {
       displayMode: display,
@@ -256,7 +276,7 @@ function renderMathML(raw, display) {
     }
 
     // ── Step 5: Wrap block equations in a centered paragraph ─────────────────
-    if (display) return `<p style="text-align:center;margin:6pt 0;">${ml}</p>`;
+    if (display) return `<p style="text-align:center;margin:6pt 0;">${ml}${escapeHtml(trailingPunct)}</p>`;
     return ml;
 
   } catch (e) {
@@ -268,11 +288,16 @@ function renderMathML(raw, display) {
 // Reinject rendered math back into HTML (replacing placeholders)
 function reinject(html, maths, mode) {
   let out = html;
-  for (const { placeholder, raw, display } of maths) {
-    const rendered = mode === 'mathml' ? renderMathML(raw, display) : renderVisual(raw, display);
+  for (const { placeholder, raw, display, trailingPunct } of maths) {
+    const rendered = mode === 'mathml'
+      ? renderMathML(raw, display, trailingPunct || '')
+      : renderVisual(raw, display, trailingPunct || '');
     // Escape placeholder characters for use in a RegExp
     const esc = placeholder.replace(/[.*+?^${}()|[\]\\%]/g, '\\$&');
-    out = out.replace(new RegExp(esc, 'g'), rendered);
+    if (mode === 'mathml' && display) {
+      out = out.replace(new RegExp(`<p>\\s*${esc}\\s*</p>`, 'g'), () => rendered);
+    }
+    out = out.replace(new RegExp(esc, 'g'), () => rendered);
   }
   return out;
 }
@@ -306,6 +331,7 @@ function processInput() {
 
   if (!raw.trim()) {
     setEmpty();
+    statEqs.textContent = '0';
     btnCopyWord.disabled = true;
     btnDownload.disabled = true;
     return;
@@ -316,6 +342,7 @@ function processInput() {
   try {
     const { cleaned, maths } = extractMath(raw);
     extractedMaths = maths;
+    statEqs.textContent = maths.length;
 
     const mdHtml = parseMarkdown(cleaned);
 
@@ -374,11 +401,12 @@ function renderEquationsPanel(maths) {
   const renderCards = (list) => list.map(m => {
     // Find the original index for the copy button
     const originalIdx = maths.indexOf(m);
+    const autoBadge = m.isPlain ? '<span class="eq-auto-badge" title="Автоматично розпізнано зі звичайного тексту">Авто</span>' : '';
     return `
       <div class="eq-card">
         <div class="eq-card-preview" id="eqprev-${originalIdx}"></div>
         <div class="eq-card-footer">
-          <span class="eq-card-type">${m.display ? 'Блочна' : 'Рядкова'}</span>
+          <span class="eq-card-type">${m.display ? 'Блочна' : 'Рядкова'}${autoBadge}</span>
           <button class="btn-eq-copy" id="eqbtn-${originalIdx}" onclick="window.copyEqLatex(${originalIdx})">
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
                  fill="none" stroke="currentColor" stroke-width="2">
@@ -565,7 +593,7 @@ async function pasteClipboard() {
 
 // ─── EXAMPLE ─────────────────────────────────────────────────────────────────
 function loadExample() {
-  inputEl.value = `## Математичний аналіз — приклад
+  inputEl.value = `## Математичний аналіз та фізичні розрахунки — приклад
 
 Корені квадратного рівняння $ax^2 + bx + c = 0$ визначаються за **формулою**:
 
@@ -573,11 +601,13 @@ $$x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
 
 де $D = b^2 - 4ac$ — дискримінант. Якщо $D > 0$ — два різних корені, якщо $D = 0$ — один.
 
-### Ряд Тейлора
+### Звичайні символьні формули (автоконвертація)
 
-Функція $e^x$ розкладається у збіжний степеневий ряд:
+Розрахунок активної електричної потужності без LaTeX-розмітки:
 
-$$e^x = \\sum_{n=0}^{\\infty} \\frac{x^n}{n!} = 1 + x + \\frac{x^2}{2!} + \\frac{x^3}{3!} + \\cdots$$
+P = (U² / Rзаг) · cos(φ) = (220² / 44) · 0,85 = 1 100 · 0,85 = 935 Вт.
+
+Швидкість тіла при вільному падінні обчислюється як v = √(2 · g · h) = √(2 · 9,81 · 20) ≈ 19,81 м/с, а загальний опір двох паралельних резисторів дорівнює Rзаг = (R1 · R2) / (R1 + R2) = (12 · 6) / (12 + 6) = 4 Ом.
 
 ### Інтегральне числення
 
@@ -601,12 +631,6 @@ $$\\int_a^b f(x)\\,dx = F(b) - F(a), \\quad \\text{де } F'(x) = f(x)$$
 function updateStats(text) {
   statChars.textContent = text.length;
   statWords.textContent = text.trim() ? text.trim().split(/\s+/).length : 0;
-  const n =
-    (text.match(/\$\$[\s\S]*?\$\$/g)    || []).length +
-    (text.match(/\\\[[\s\S]*?\\\]/g)    || []).length +
-    (text.match(/\\\([\s\S]*?\\\)/g)    || []).length +
-    (text.match(/(?<!\$)\$(?!\$)[^$\n]+?\$(?!\$)/g) || []).length;
-  statEqs.textContent = n;
 }
 
 // ─── EMPTY STATE ─────────────────────────────────────────────────────────────

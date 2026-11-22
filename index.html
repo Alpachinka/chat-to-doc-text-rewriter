@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ChatToDoc — Вставка формул у Word без зайвих символів</title>
-  <meta name="description" content="Конвертуйте текст із формулами LaTeX від чат-ботів (ChatGPT, Claude, Gemini) у формат, який ідеально вставляється в Microsoft Word як редаговані рівняння." />
+  <meta name="description" content="Конвертуйте текст із формулами LaTeX від чат-ботів (ChatGPT, Claude, Gemini) та звичайні символьні формули у формат, який ідеально вставляється в Microsoft Word як редаговані рівняння." />
   <link rel="icon" href="favicon.png" type="image/png" />
 
   <!-- Google Fonts -->
@@ -36,7 +36,7 @@
         </div>
         <div class="logo-text">
           <span class="logo-title">ChatToDoc</span>
-          <span class="logo-sub">LaTeX → Word</span>
+          <span class="logo-sub">LaTeX &amp; Формули → Word</span>
         </div>
       </div>
 
@@ -62,10 +62,10 @@
     <div class="hero-inner">
       <div class="hero-badge">
         <i data-lucide="sparkles"></i>
-        <span>Підтримує LaTeX, Markdown, таблиці</span>
+        <span>Підтримує LaTeX, звичайні формули, Markdown і таблиці</span>
       </div>
-      <h1 class="hero-title">Скопіюй текст із чат-бота — вставляй у Word без зусиль</h1>
-      <p class="hero-desc">Вставте текст із ChatGPT, Claude або Gemini, натисніть кнопку — і формули у Word стануть рідними редагованими рівняннями.</p>
+      <h1 class="hero-title">Скопіюй текст із чат-бота або формули — вставляй у Word без зусиль</h1>
+      <p class="hero-desc">Вставте текст із ChatGPT, Claude, Gemini або звичайні символьні формули — вони автоматично перетворяться на красиві редаговані рівняння Word.</p>
     </div>
   </div>
 
@@ -92,9 +92,8 @@
 
       <div class="textarea-wrapper">
         <textarea id="input-text"
-          placeholder="Вставте сюди текст із чат-бота... &#10;&#10;Підтримуються:&#10;• Формули LaTeX: $x^2 + y^2 = z^2$&#10;• Блочні формули: $$\sum_{i=1}^{n} x_i$$&#10;• Markdown заголовки, списки, таблиці&#10;• Жирний **текст** та _курсив_"
+          placeholder="Вставте сюди текст із чат-бота або звичайні формули... &#10;&#10;Підтримуються:&#10;• Формули LaTeX: $x^2 + y^2 = z^2$ та $$\sum_{i=1}^{n} x_i$$&#10;• Звичайні формули: P = (U² / Rзаг) · cos(φ) = 935 Вт&#10;• Корені, дроби, індекси: v = √(2 · g · h) ≈ 19,81 м/с&#10;• Markdown заголовки, списки, таблиці, **жирний** та _курсив_"
           spellcheck="false"
-          id="input-text"
         ></textarea>
         <div class="textarea-overlay" id="input-highlight" aria-hidden="true"></div>
       </div>
@@ -165,6 +164,15 @@
             </select>
           </label>
         </div>
+
+        <label class="setting-toggle">
+          <input type="checkbox" id="setting-auto-plain" checked />
+          <span class="toggle-slider" aria-hidden="true"></span>
+          <span class="toggle-text">
+            <strong>Авто-конвертація звичайних формул</strong>
+            <small>Перетворює символьні формули (напр. <code>v = √(2 · g · h)</code>) у рівняння Word</small>
+          </span>
+        </label>
       </div>
     </section>
 
@@ -250,8 +258,8 @@
           <div class="guide-step">
             <div class="step-num">1</div>
             <div class="step-content">
-              <h3>Вставте текст із чат-бота</h3>
-              <p>Скопіюйте відповідь із ChatGPT, Claude, Gemini чи будь-якого іншого чат-бота та вставте її у поле ліворуч.</p>
+              <h3>Вставте текст із чат-бота або звичайні формули</h3>
+              <p>Скопіюйте відповідь із ChatGPT, Claude, Gemini або звичайні текстові формули з розрахунками та вставте їх у поле ліворуч.</p>
             </div>
           </div>
           <div class="guide-step">
@@ -284,23 +292,23 @@
         </div>
 
         <div class="guide-formats">
-          <h3>Підтримувані формати LaTeX</h3>
+          <h3>Підтримувані формати формул</h3>
           <div class="format-grid">
             <div class="format-item">
               <div class="format-code">$x + y = z$</div>
-              <div class="format-label">Рядкова формула</div>
+              <div class="format-label">Рядкова LaTeX</div>
             </div>
             <div class="format-item">
               <div class="format-code">$$\frac{a}{b}$$</div>
-              <div class="format-label">Блочна формула</div>
+              <div class="format-label">Блочна LaTeX</div>
             </div>
             <div class="format-item">
-              <div class="format-code">\( e^{i\pi} \)</div>
-              <div class="format-label">Рядкова (альт.)</div>
+              <div class="format-code">v = √(2 · g · h)</div>
+              <div class="format-label">Звичайна символьна (авто)</div>
             </div>
             <div class="format-item">
-              <div class="format-code">\[ \sum_{i=1}^n \]</div>
-              <div class="format-label">Блочна (альт.)</div>
+              <div class="format-code">P = (U² / Rзаг) · cos(φ)</div>
+              <div class="format-label">Дроби, індекси, степені (авто)</div>
             </div>
           </div>
         </div>
@@ -314,6 +322,7 @@
     <span id="toast-message">Скопійовано!</span>
   </div>
 
+  <script src="plain-math.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
