@@ -1049,3 +1049,17 @@ kbd {
   letter-spacing: 0.04em;
   vertical-align: middle;
 }
+
+.btn-eq-word {
+  background: linear-gradient(135deg, var(--accent-primary), #8b5cf6);
+  border-color: transparent;
+  color: #fff;
+}
+.btn-eq-word:hover {
+  background: linear-gradient(135deg, var(--accent-hover), #9f7aea);
+  border-color: transparent;
+  color: #fff;
+}
+
+.ctd-math { display: inline; }
+.ctd-math-block { display: block; }

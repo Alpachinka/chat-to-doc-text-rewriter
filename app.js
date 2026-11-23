@@ -1,7 +1,8 @@
 /* ====================================================
-   ChatToDoc — app.js  v3.1
-   Robust fix: string-split annotation removal,
-   marked v12 compatible, plain-text formula auto-conversion
+   ChatToDoc — app.js  v3.2
+   Native MS Word OMML (<m:oMath>) + unsanitized copy,
+   plain-text symbolic formula auto-conversion,
+   marked v12 compatible, full error handling
    ==================================================== */
 
 'use strict';
@@ -44,12 +45,14 @@ const iconSun          = document.getElementById('icon-sun');
 const iconMoon         = document.getElementById('icon-moon');
 
 // ─── State ───────────────────────────────────────────────────────────────────
-let processedHtml     = '';
-let processedWordHtml = '';
-let extractedMaths    = [];
-let currentTheme      = localStorage.getItem('ctd-theme') || 'dark';
-let autoPlainEnabled  = localStorage.getItem('ctd-auto-plain') !== 'false';
-let debounceTimer     = null;
+let processedHtml            = '';
+let processedWordPreviewHtml = '';
+let processedWordOmmlHtml    = '';
+let processedCleanedText     = '';
+let extractedMaths           = [];
+let currentTheme             = localStorage.getItem('ctd-theme') || 'dark';
+let autoPlainEnabled         = localStorage.getItem('ctd-auto-plain') !== 'false';
+let debounceTimer            = null;
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -58,7 +61,8 @@ document.addEventListener('DOMContentLoaded', () => {
   waitForKatex(() => {
     setupListeners();
     if (typeof lucide !== 'undefined') lucide.createIcons();
-    console.log('[ChatToDoc] Ready. KaTeX:', typeof katex, 'Marked:', typeof marked, 'PlainMath:', typeof window.PlainMath);
+    console.log('[ChatToDoc] Ready. KaTeX:', typeof katex, 'Marked:', typeof marked,
+      'PlainMath:', typeof window.PlainMath, 'OMML:', typeof window.MathMLToOMML);
   });
 });
 
@@ -78,7 +82,10 @@ function setupListeners() {
   btnGuide.addEventListener('click', () => { modalGuide.hidden = false; });
   closeGuide.addEventListener('click', () => { modalGuide.hidden = true; });
   modalGuide.addEventListener('click', e => { if (e.target === modalGuide) modalGuide.hidden = true; });
-  [settingFont, settingSize, settingSpacing, settingCols].forEach(el => el.addEventListener('change', updateWordPreview));
+  [settingFont, settingSize, settingSpacing, settingCols].forEach(el => el.addEventListener('change', () => {
+    updateWordPreview();
+    if (processedWordOmmlHtml) previewRaw.textContent = buildClipboardHtml(processedWordOmmlHtml);
+  }));
   if (settingAutoPlain) {
     settingAutoPlain.addEventListener('change', () => {
       autoPlainEnabled = settingAutoPlain.checked;
@@ -86,6 +93,10 @@ function setupListeners() {
       processInput();
     });
   }
+  // Intercept manual Ctrl+C inside preview panes so selected equations copy as native Word OMML
+  previewRender.addEventListener('copy', handlePreviewCopy);
+  previewWord.addEventListener('copy', handlePreviewCopy);
+
   inputEl.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); copyForWord(); } });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modalGuide.hidden) modalGuide.hidden = true; });
 }
@@ -195,7 +206,6 @@ function parseSingleDollar(text, maths, startIdx) {
 
       if (found && inner.length > 0) {
         const ph = `%%MATH_${idx}_I%%`;
-        // We use 'i' to check table context in the current cleaned string
         maths.push({ placeholder: ph, raw: inner.trim(), display: false, inTable: inTable(text, i) });
         idx++;
         out += ph;
@@ -211,76 +221,68 @@ function parseSingleDollar(text, maths, startIdx) {
 function isProbablyCurrency(s) { return /^\s*[\d,. ]+\s*$/.test(s); }
 
 // ════════════════════════════════════════════════════════════
-// MATH RENDERING
+// MATH RENDERING (Visual KaTeX, Clean MathML, Native Word OMML)
 // ════════════════════════════════════════════════════════════
 
 // Visual HTML (KaTeX HTML for screen preview)
-function renderVisual(raw, display, trailingPunct = '') {
+function renderVisual(raw, display, trailingPunct = '', idx = -1) {
   try {
     const tex = display && trailingPunct ? `${raw}${trailingPunct}` : raw;
-    return katex.renderToString(tex, { displayMode: display, output: 'html', throwOnError: false });
+    const html = katex.renderToString(tex, { displayMode: display, output: 'html', throwOnError: false });
+    if (idx >= 0) {
+      const tag = display ? 'div' : 'span';
+      return `<${tag} class="ctd-math${display ? ' ctd-math-block' : ''}" data-math-idx="${idx}">${html}</${tag}>`;
+    }
+    return html;
   } catch(e) {
     return `<span class="math-error" title="${escapeHtml(String(e))}">${escapeHtml(raw)}</span>`;
   }
 }
 
-/**
- * Render MathML for Word clipboard.
- *
- * THE CORE BUG FIX:
- * KaTeX always wraps equations in:
- *   <math><semantics><mrow>…</mrow><annotation encoding="application/x-tex">RAW LATEX</annotation></semantics></math>
- *
- * Word reads the <annotation> text content as PLAIN TEXT next to the equation,
- * giving the garbled "PenaltyDisk=min...Penalty_{Disk} = \min..." output.
- *
- * We use string-splitting (not regex, not DOMParser) to reliably remove it.
- */
-function renderMathML(raw, display, trailingPunct = '') {
+// Raw KaTeX MathML string -> cleaned standalone <math xmlns="...">...</math>
+function getCleanMathML(raw, display) {
   try {
-    let ml = katex.renderToString(raw, {
+    const rawMl = katex.renderToString(raw, {
       displayMode: display,
       output: 'mathml',
       throwOnError: false,
     });
-
-    // ── Step 1: Remove <annotation>...</annotation> by string splitting ──────
-    // This is the most reliable method (regex can fail on complex LaTeX,
-    // DOMParser produces dirty namespace attributes).
-    const ANN_OPEN  = '<annotation';
-    const ANN_CLOSE = '</annotation>';
-    let cleaned = '';
-    let pos = 0;
-    while (pos < ml.length) {
-      const openIdx = ml.indexOf(ANN_OPEN, pos);
-      if (openIdx === -1) { cleaned += ml.slice(pos); break; }
-      cleaned += ml.slice(pos, openIdx); // keep everything before <annotation
-      const closeIdx = ml.indexOf(ANN_CLOSE, openIdx);
-      if (closeIdx === -1) break; // malformed — stop
-      pos = closeIdx + ANN_CLOSE.length; // skip past </annotation>
+    if (typeof window.MathMLToOMML !== 'undefined') {
+      return window.MathMLToOMML.cleanMathML(rawMl, display);
     }
-    ml = cleaned;
-
-    // ── Step 2: Simplify <semantics> wrapper ─────────────────────────────────
-    // After removing annotation, semantics may wrap a lone <mrow>; unwrap it.
-    ml = ml.replace(/<semantics>\s*(<mrow[\s\S]*?<\/mrow>)\s*<\/semantics>/g, '$1');
-
-    // ── Step 3: Ensure xmlns so Word recognises <math> as an equation ────────
-    if (!ml.includes('xmlns=')) {
-      ml = ml.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML"');
-    }
-
-    // ── Step 4: Mark display equations ───────────────────────────────────────
-    if (display && !ml.includes('display=')) {
-      ml = ml.replace('<math', '<math display="block"');
-    }
-
-    // ── Step 5: Wrap block equations in a centered paragraph ─────────────────
-    if (display) return `<p style="text-align:center;margin:6pt 0;">${ml}${escapeHtml(trailingPunct)}</p>`;
-    return ml;
-
+    // Fallback if MathMLToOMML didn't load
+    return rawMl.replace(/<annotation[\s\S]*?<\/annotation>/g, '');
   } catch (e) {
     console.error('[ChatToDoc] MathML render error:', e);
+    return `<span>${escapeHtml(raw)}</span>`;
+  }
+}
+
+// Clean MathML for browser "Вигляд у Word" preview tab
+function renderWordPreviewMath(raw, display, trailingPunct = '', idx = -1) {
+  const ml = getCleanMathML(raw, display);
+  const wrapped = idx >= 0
+    ? `<span class="ctd-math" data-math-idx="${idx}">${ml}</span>`
+    : ml;
+  if (display) return `<p style="text-align:center;margin:6pt 0;">${wrapped}${escapeHtml(trailingPunct)}</p>`;
+  return wrapped;
+}
+
+// Native Microsoft Word OMML (<m:oMath> / <m:oMathPara>) for clipboard & Word file
+function renderWordOMML(raw, display, trailingPunct = '') {
+  try {
+    const rawMl = katex.renderToString(raw, {
+      displayMode: display,
+      output: 'mathml',
+      throwOnError: false,
+    });
+    if (typeof window.MathMLToOMML !== 'undefined') {
+      return window.MathMLToOMML.wrapForWordHtml(rawMl, { display, trailingPunct });
+    }
+    const clean = getCleanMathML(raw, display);
+    return display ? `<p style="text-align:center;margin:6pt 0;">${clean}${escapeHtml(trailingPunct)}</p>` : clean;
+  } catch (e) {
+    console.error('[ChatToDoc] OMML render error:', e);
     return `<span>${escapeHtml(raw)}</span>`;
   }
 }
@@ -288,17 +290,21 @@ function renderMathML(raw, display, trailingPunct = '') {
 // Reinject rendered math back into HTML (replacing placeholders)
 function reinject(html, maths, mode) {
   let out = html;
-  for (const { placeholder, raw, display, trailingPunct } of maths) {
-    const rendered = mode === 'mathml'
-      ? renderMathML(raw, display, trailingPunct || '')
-      : renderVisual(raw, display, trailingPunct || '');
-    // Escape placeholder characters for use in a RegExp
+  maths.forEach(({ placeholder, raw, display, trailingPunct }, idx) => {
+    let rendered;
+    if (mode === 'omml') {
+      rendered = renderWordOMML(raw, display, trailingPunct || '');
+    } else if (mode === 'mathml') {
+      rendered = renderWordPreviewMath(raw, display, trailingPunct || '', idx);
+    } else {
+      rendered = renderVisual(raw, display, trailingPunct || '', idx);
+    }
     const esc = placeholder.replace(/[.*+?^${}()|[\]\\%]/g, '\\$&');
-    if (mode === 'mathml' && display) {
+    if ((mode === 'omml' || mode === 'mathml') && display) {
       out = out.replace(new RegExp(`<p>\\s*${esc}\\s*</p>`, 'g'), () => rendered);
     }
     out = out.replace(new RegExp(esc, 'g'), () => rendered);
-  }
+  });
   return out;
 }
 
@@ -308,9 +314,7 @@ function reinject(html, maths, mode) {
 function parseMarkdown(text) {
   if (typeof window.marked === 'undefined') return `<p>${escapeHtml(text)}</p>`;
   try {
-    // marked v12: pass options directly to parse(), don't use setOptions with deprecated keys
     const result = window.marked.parse(text, { gfm: true, breaks: true });
-    // In very old or very new marked, parse might return a Promise — handle gracefully
     if (result && typeof result.then === 'function') {
       console.warn('[ChatToDoc] marked returned Promise — using plain text fallback');
       return `<p>${escapeHtml(text)}</p>`;
@@ -342,23 +346,26 @@ function processInput() {
   try {
     const { cleaned, maths } = extractMath(raw);
     extractedMaths = maths;
+    processedCleanedText = cleaned;
     statEqs.textContent = maths.length;
 
     const mdHtml = parseMarkdown(cleaned);
-
-    // Screen preview (KaTeX HTML)
-    processedHtml = reinject(mdHtml, maths, 'visual');
-
-    // Word clipboard (clean MathML, no annotations)
-    const mdWordHtml = parseMarkdown(cleaned); // same markdown parse
-    const wordInner  = mdWordHtml
+    const safeHtml = mdHtml
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-    processedWordHtml = reinject(wordInner, maths, 'mathml');
+
+    // 1. Screen preview (KaTeX HTML)
+    processedHtml = reinject(safeHtml, maths, 'visual');
+
+    // 2. Browser "Вигляд у Word" preview (clean Presentation MathML)
+    processedWordPreviewHtml = reinject(safeHtml, maths, 'mathml');
+
+    // 3. Real MS Word clipboard & download HTML (native OMML <m:oMath>)
+    processedWordOmmlHtml = reinject(safeHtml, maths, 'omml');
 
     previewRender.innerHTML = processedHtml;
     updateWordPreview();
-    previewRaw.textContent  = buildClipboardHtml(processedWordHtml);
+    previewRaw.textContent  = buildClipboardHtml(processedWordOmmlHtml);
 
     renderEquationsPanel(maths);
 
@@ -375,12 +382,12 @@ function processInput() {
 
 // ─── WORD PREVIEW ────────────────────────────────────────────────────────────
 function updateWordPreview() {
-  if (!processedWordHtml) return;
+  if (!processedWordPreviewHtml) return;
   previewWord.innerHTML = `
     <div style="font-family:${settingFont.value},sans-serif;
                 font-size:${settingSize.value};
                 line-height:${settingSpacing.value};color:#000;">
-      ${processedWordHtml}
+      ${processedWordPreviewHtml}
     </div>`;
 }
 
@@ -399,7 +406,6 @@ function renderEquationsPanel(maths) {
   section.className = 'equations-panel';
 
   const renderCards = (list) => list.map(m => {
-    // Find the original index for the copy button
     const originalIdx = maths.indexOf(m);
     const autoBadge = m.isPlain ? '<span class="eq-auto-badge" title="Автоматично розпізнано зі звичайного тексту">Авто</span>' : '';
     return `
@@ -407,14 +413,24 @@ function renderEquationsPanel(maths) {
         <div class="eq-card-preview" id="eqprev-${originalIdx}"></div>
         <div class="eq-card-footer">
           <span class="eq-card-type">${m.display ? 'Блочна' : 'Рядкова'}${autoBadge}</span>
-          <button class="btn-eq-copy" id="eqbtn-${originalIdx}" onclick="window.copyEqLatex(${originalIdx})">
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
-                 fill="none" stroke="currentColor" stroke-width="2">
-              <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
-              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
-            </svg>
-            Скопіювати LaTeX
-          </button>
+          <div class="eq-card-actions">
+            <button class="btn-eq-copy btn-eq-word" id="eqwordbtn-${originalIdx}" onclick="window.copyEqWord(${originalIdx})" title="Скопіювати як рівняння Word (просто Ctrl+V у Word)">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>
+                <path d="M14 2v4a2 2 0 0 0 2 2h4"/>
+              </svg>
+              Для Word
+            </button>
+            <button class="btn-eq-copy" id="eqbtn-${originalIdx}" onclick="window.copyEqLatex(${originalIdx})" title="Скопіювати код LaTeX">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2">
+                <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+              </svg>
+              LaTeX
+            </button>
+          </div>
         </div>
         <pre class="eq-latex-source">${escapeHtml(m.raw)}</pre>
       </div>
@@ -434,7 +450,7 @@ function renderEquationsPanel(maths) {
           <span>Основні формули</span>
         </div>
         <div class="eq-panel-hint">
-          Для вставки через Alt+= у Word (якщо Ctrl+V вставляє символи)
+          Натисніть «Для Word» і просто вставте через Ctrl+V у Word як редаговане рівняння
         </div>
       </div>
       <div class="eq-cards">${renderCards(mainMaths)}</div>
@@ -476,6 +492,26 @@ function renderEquationsPanel(maths) {
   });
 }
 
+window.copyEqWord = async function(idx) {
+  const m = extractedMaths[idx];
+  if (!m) return;
+  const btn = document.getElementById(`eqwordbtn-${idx}`);
+  const ommlHtml = buildClipboardHtml(renderWordOMML(m.raw, m.display, ''));
+  const mathmlPlain = getCleanMathML(m.raw, m.display);
+
+  const ok = await writeWordClipboard(ommlHtml, mathmlPlain);
+  if (ok) {
+    if (btn) {
+      const orig = btn.innerHTML;
+      btn.textContent = '✓ Скопійовано!';
+      setTimeout(() => { btn.innerHTML = orig; }, 2000);
+    }
+    showToast('Формулу скопійовано для Word! Просто натисніть Ctrl+V у документі Word.', 'success');
+  } else {
+    showToast('Не вдалось скопіювати. Спробуйте кнопку «LaTeX».', 'error');
+  }
+};
+
 window.copyEqLatex = async function(idx) {
   const m = extractedMaths[idx];
   if (!m) return;
@@ -500,17 +536,18 @@ function buildClipboardHtml(bodyHtml) {
   const spacing = settingSpacing.value;
   const width   = settingCols.value === 'auto' ? '100%' : settingCols.value;
 
-  // Word-compatible HTML with Office namespace declarations.
-  // xmlns:m hints to Word that MathML content should be converted to equations.
-  return `<html
-  xmlns="http://www.w3.org/1999/xhtml"
-  xmlns:o="urn:schemas-microsoft-com:office:office"
-  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-  xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  // Exact Microsoft Word HTML schema with OMML namespace (2004/12/omml)
+  // and StartFragment/EndFragment markers for Windows CF_HTML.
+  return `<html xmlns:v="urn:schemas-microsoft-com:vml"
+xmlns:o="urn:schemas-microsoft-com:office:office"
+xmlns:w="urn:schemas-microsoft-com:office:word"
+xmlns:m="http://schemas.microsoft.com/office/2004/12/omml"
+xmlns="http://www.w3.org/TR/REC-html40">
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 <meta name="ProgId" content="Word.Document"/>
 <meta name="Generator" content="Microsoft Word 15"/>
+<meta name="Originator" content="Microsoft Word 15"/>
 <style type="text/css">
 body,p,div,li,td,th{font-family:${font},Arial,sans-serif;font-size:${size};line-height:${spacing};color:#000000;}
 table{border-collapse:collapse;width:${width};}
@@ -520,64 +557,191 @@ h1{font-size:1.8em;}h2{font-size:1.4em;}h3{font-size:1.15em;}
 </style>
 </head>
 <body>
+<!--StartFragment-->
 ${bodyHtml}
+<!--EndFragment-->
 </body>
 </html>`;
 }
 
-async function copyForWord() {
-  if (!processedWordHtml) return;
-  const html = buildClipboardHtml(processedWordHtml);
-  const text = inputEl.value;
+/**
+ * Write raw unsanitized HTML (preserving <!--[if gte msEquation 12]><m:oMath>)
+ * AND plain text/MathML to the system clipboard.
+ *
+ * Why `copy` event first?
+ * Chrome/Edge's async `navigator.clipboard.write()` runs an HTML sanitizer on
+ * `text/html` that strips conditional comments and `<m:oMath>` tags!
+ * Writing via the synchronous `copy` event (`e.clipboardData.setData`) bypasses
+ * that sanitizer so Microsoft Word receives the exact OMML equation markup.
+ */
+async function writeWordClipboard(html, plainText) {
+  // 1. Primary path: synchronous copy event (unsanitized CF_HTML for Word OMML)
+  let copied = false;
+  const onCopy = (e) => {
+    e.preventDefault();
+    e.clipboardData.setData('text/html', html);
+    e.clipboardData.setData('text/plain', plainText);
+    copied = true;
+  };
+  document.addEventListener('copy', onCopy, { once: true });
 
+  const dummy = document.createElement('span');
+  dummy.textContent = '\u200B';
+  dummy.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none;';
+  document.body.appendChild(dummy);
+
+  const sel = window.getSelection();
+  const prevRanges = [];
+  for (let i = 0; i < sel.rangeCount; i++) prevRanges.push(sel.getRangeAt(i).cloneRange());
+
+  const range = document.createRange();
+  range.selectNodeContents(dummy);
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  try {
+    document.execCommand('copy');
+  } catch (err) {
+    console.warn('[ChatToDoc] execCommand copy error:', err);
+  } finally {
+    document.removeEventListener('copy', onCopy);
+    sel.removeAllRanges();
+    prevRanges.forEach(r => { try { sel.addRange(r); } catch {} });
+    document.body.removeChild(dummy);
+  }
+
+  if (copied) return true;
+
+  // 2. Fallback: Async Clipboard API
   if (navigator.clipboard && window.ClipboardItem) {
     try {
       await navigator.clipboard.write([new ClipboardItem({
         'text/html':  new Blob([html], { type: 'text/html' }),
-        'text/plain': new Blob([text], { type: 'text/plain' }),
+        'text/plain': new Blob([plainText], { type: 'text/plain' }),
       })]);
-      showCopySuccess();
-      return;
+      return true;
     } catch (err) {
       console.warn('[ChatToDoc] Clipboard API error:', err);
     }
   }
+  return false;
+}
 
-  // Legacy fallback
-  try {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    tmp.style.cssText = 'position:fixed;top:-9999px;left:-9999px;pointer-events:none;';
-    document.body.appendChild(tmp);
-    const sel = window.getSelection();
-    const r = document.createRange();
-    r.selectNodeContents(tmp);
-    sel.removeAllRanges();
-    sel.addRange(r);
-    document.execCommand('copy');
-    sel.removeAllRanges();
-    document.body.removeChild(tmp);
+function buildSmartPlainText() {
+  // If the entire input is a single equation (e.g. user pasted one plain symbolic formula),
+  // put clean MathML in text/plain so even "Keep Text Only" or Alt+= in Word converts it!
+  if (extractedMaths.length === 1) {
+    const rest = processedCleanedText.replace(extractedMaths[0].placeholder, '').trim();
+    if (!rest) {
+      return getCleanMathML(extractedMaths[0].raw, extractedMaths[0].display);
+    }
+  }
+  // Otherwise replace placeholders with converted LaTeX (never raw broken symbols)
+  let plain = processedCleanedText || inputEl.value;
+  for (const m of extractedMaths) {
+    const esc = m.placeholder.replace(/[.*+?^${}()|[\]\\%]/g, '\\$&');
+    plain = plain.replace(new RegExp(esc, 'g'), () => m.raw);
+  }
+  return plain;
+}
+
+async function copyForWord() {
+  if (!processedWordOmmlHtml) return;
+  const html = buildClipboardHtml(processedWordOmmlHtml);
+  const plain = buildSmartPlainText();
+
+  const ok = await writeWordClipboard(html, plain);
+  if (ok) {
     showCopySuccess();
-  } catch (e2) {
+  } else {
     showToast('Не вдалось скопіювати. Використайте "HTML файл".', 'error');
   }
 }
 
+// Intercept manual Ctrl+C selection inside the preview panes
+function handlePreviewCopy(e) {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !extractedMaths.length) return;
+
+  const range = sel.getRangeAt(0);
+  const ancestor = range.commonAncestorContainer;
+  const enclosingMath = ancestor.nodeType === 1
+    ? ancestor.closest('.ctd-math[data-math-idx]')
+    : (ancestor.parentElement && ancestor.parentElement.closest('.ctd-math[data-math-idx]'));
+
+  // Case 1: User selected inside a single formula in the preview
+  if (enclosingMath) {
+    const idx = parseInt(enclosingMath.dataset.mathIdx, 10);
+    const m = extractedMaths[idx];
+    if (m) {
+      e.preventDefault();
+      e.clipboardData.setData('text/html', buildClipboardHtml(renderWordOMML(m.raw, m.display, '')));
+      e.clipboardData.setData('text/plain', getCleanMathML(m.raw, m.display));
+      showToast('Формулу скопійовано для Word! Вставте через Ctrl+V.', 'success');
+    }
+    return;
+  }
+
+  // Case 2: User selected text + one or more formulas in the preview
+  const frag = range.cloneContents();
+  const mathNodes = frag.querySelectorAll('.ctd-math[data-math-idx]');
+  if (!mathNodes.length) return;
+
+  const tmp = document.createElement('div');
+  tmp.appendChild(frag);
+  const markers = [];
+
+  tmp.querySelectorAll('.ctd-math[data-math-idx]').forEach((el, k) => {
+    const idx = parseInt(el.dataset.mathIdx, 10);
+    const m = extractedMaths[idx];
+    if (!m) return;
+    const marker = `%%COPY_OMML_${k}%%`;
+    markers.push({ marker, m });
+    el.replaceWith(document.createTextNode(marker));
+  });
+
+  if (!markers.length) return;
+
+  let selHtml = tmp.innerHTML;
+  let selPlain = tmp.textContent || '';
+  const onlyOneMath = markers.length === 1 && selPlain.replace(markers[0].marker, '').trim() === '';
+
+  if (onlyOneMath) {
+    const m = markers[0].m;
+    e.preventDefault();
+    e.clipboardData.setData('text/html', buildClipboardHtml(renderWordOMML(m.raw, m.display, '')));
+    e.clipboardData.setData('text/plain', getCleanMathML(m.raw, m.display));
+    showToast('Формулу скопійовано для Word! Вставте через Ctrl+V.', 'success');
+    return;
+  }
+
+  for (const { marker, m } of markers) {
+    const omml = renderWordOMML(m.raw, m.display, m.trailingPunct || '');
+    selHtml = selHtml.replace(marker, () => omml);
+    selPlain = selPlain.replace(marker, () => m.raw);
+  }
+
+  e.preventDefault();
+  e.clipboardData.setData('text/html', buildClipboardHtml(selHtml));
+  e.clipboardData.setData('text/plain', selPlain);
+  showToast('Скопійовано з формулами для Word! Вставте через Ctrl+V.', 'success');
+}
+
 function showCopySuccess() {
   btnCopyLbl.textContent = '✓ Скопійовано!';
-  showToast('Скопійовано! Вставте у Word (Ctrl+V). Формули не ті? — прокрутіть вниз, скористайтесь панеллю формул.', 'success');
+  showToast('Скопійовано для Word! Вставте у документ Word через Ctrl+V.', 'success');
   setTimeout(() => { btnCopyLbl.textContent = 'Скопіювати для MS Word'; }, 3000);
 }
 
 // ─── DOWNLOAD HTML ───────────────────────────────────────────────────────────
 function downloadHtml() {
-  if (!processedWordHtml) return;
-  const blob = new Blob([buildClipboardHtml(processedWordHtml)], { type: 'text/html;charset=utf-8' });
+  if (!processedWordOmmlHtml) return;
+  const blob = new Blob([buildClipboardHtml(processedWordOmmlHtml)], { type: 'text/html;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
   const a    = Object.assign(document.createElement('a'), { href: url, download: 'document.html' });
   a.click();
   URL.revokeObjectURL(url);
-  showToast('HTML-файл завантажено', 'success');
+  showToast('HTML-файл завантажено (відкрийте у Word)', 'success');
 }
 
 // ─── PASTE ───────────────────────────────────────────────────────────────────
@@ -642,7 +806,7 @@ function setEmpty() {
   previewRender.innerHTML = ph('Вставте текст зліва');
   previewWord.innerHTML   = ph('Тут буде вигляд у Word');
   previewRaw.textContent  = 'HTML-код з\'явиться тут...';
-  processedHtml = processedWordHtml = '';
+  processedHtml = processedWordPreviewHtml = processedWordOmmlHtml = processedCleanedText = '';
   extractedMaths = [];
   const p = document.getElementById('eq-panel');
   if (p) p.remove();
