@@ -484,10 +484,10 @@ window.copyEqWord = async function(idx) {
   const m = extractedMaths[idx];
   if (!m) return;
   const btn = document.getElementById(`eqwordbtn-${idx}`);
-  const htmlFrag = buildClipboardFragment(renderWordMathML(m.raw, m.display, ''));
+  const htmlDoc = buildClipboardHtml(renderWordMathML(m.raw, m.display, ''));
   const plainText = m.raw;
 
-  const ok = await writeWordClipboard(htmlFrag, plainText);
+  const ok = await writeWordClipboard(htmlDoc, plainText);
   if (ok) {
     if (btn) {
       const orig = btn.innerHTML;
@@ -631,7 +631,7 @@ function buildSmartPlainText() {
 async function copyForWord() {
   if (!processedWordOmmlHtml) return;
 
-  const html = buildClipboardFragment(processedWordOmmlHtml);
+  const html = buildClipboardHtml(processedWordOmmlHtml);
   const plain = buildSmartPlainText();
 
   const ok = await writeWordClipboard(html, plain);
@@ -659,7 +659,7 @@ function handlePreviewCopy(e) {
     const m = extractedMaths[idx];
     if (m) {
       e.preventDefault();
-      e.clipboardData.setData('text/html', buildClipboardFragment(renderWordMathML(m.raw, m.display, '')));
+      e.clipboardData.setData('text/html', buildClipboardHtml(renderWordMathML(m.raw, m.display, '')));
       e.clipboardData.setData('text/plain', m.raw);
       showToast('Формулу скопійовано для Word! Вставте через Ctrl+V.', 'success');
     }
@@ -696,7 +696,7 @@ function handlePreviewCopy(e) {
   }
 
   e.preventDefault();
-  e.clipboardData.setData('text/html', buildClipboardFragment(selHtml));
+  e.clipboardData.setData('text/html', buildClipboardHtml(selHtml));
   e.clipboardData.setData('text/plain', selPlain);
   showToast('Скопійовано з формулами для Word! Вставте через Ctrl+V.', 'success');
 }
