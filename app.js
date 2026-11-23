@@ -480,50 +480,21 @@ function renderEquationsPanel(maths) {
   });
 }
 
-async function copyPureMathMLToClipboard(mathmlStr) {
-  // Writing ONLY text/plain containing pure <math xmlns="http://www.w3.org/1998/Math/MathML">
-  // makes Microsoft Word automatically convert it into a native editable OMML equation on Ctrl+V!
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    try {
-      await navigator.clipboard.writeText(mathmlStr);
-      return true;
-    } catch (err) {
-      console.warn('[ChatToDoc] writeText error:', err);
-    }
-  }
-  // Fallback via synchronous copy event (plain text ONLY, no text/html)
-  let copied = false;
-  const onCopy = (e) => {
-    e.preventDefault();
-    e.clipboardData.setData('text/plain', mathmlStr);
-    copied = true;
-  };
-  document.addEventListener('copy', onCopy, { once: true });
-  const dummy = document.createElement('textarea');
-  dummy.value = mathmlStr;
-  dummy.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-  document.body.appendChild(dummy);
-  dummy.select();
-  try { document.execCommand('copy'); } catch {}
-  document.removeEventListener('copy', onCopy);
-  document.body.removeChild(dummy);
-  return copied;
-}
-
 window.copyEqWord = async function(idx) {
   const m = extractedMaths[idx];
   if (!m) return;
   const btn = document.getElementById(`eqwordbtn-${idx}`);
-  const mathmlPlain = getCleanMathML(m.raw, m.display);
+  const htmlFrag = buildClipboardFragment(renderWordMathML(m.raw, m.display, ''));
+  const plainText = m.raw;
 
-  const ok = await copyPureMathMLToClipboard(mathmlPlain);
+  const ok = await writeWordClipboard(htmlFrag, plainText);
   if (ok) {
     if (btn) {
       const orig = btn.innerHTML;
       btn.textContent = '✓ Скопійовано!';
       setTimeout(() => { btn.innerHTML = orig; }, 2000);
     }
-    showToast('Формулу скопійовано для Word! Просто натисніть Ctrl+V у документі Word.', 'success');
+    showToast('Формулу скопійовано для Word! Натисніть Ctrl+V у документі Word.', 'success');
   } else {
     showToast('Не вдалось скопіювати. Спробуйте кнопку «LaTeX».', 'error');
   }
@@ -547,12 +518,25 @@ window.copyEqLatex = async function(idx) {
 };
 
 // ─── CLIPBOARD HELPERS ───────────────────────────────────────────────────────
-function buildClipboardHtml(bodyHtml) {
+function buildClipboardStyles() {
   const font    = settingFont.value;
   const size    = settingSize.value;
   const spacing = settingSpacing.value;
   const width   = settingCols.value === 'auto' ? '100%' : settingCols.value;
+  return `body,p,div,li,td,th{font-family:${font},Arial,sans-serif;font-size:${size};line-height:${spacing};color:#000000;}
+table{border-collapse:collapse;width:${width};}
+td,th{border:1px solid #000;padding:4pt 8pt;}
+th{background:#f2f2f2;font-weight:bold;}
+h1{font-size:1.8em;}h2{font-size:1.4em;}h3{font-size:1.15em;}`;
+}
 
+// Clean HTML fragment for browser clipboard (Chrome/Edge automatically adds <html><body><!--StartFragment-->)
+function buildClipboardFragment(bodyHtml) {
+  return `<style type="text/css">${buildClipboardStyles()}</style>${bodyHtml}`;
+}
+
+// Full standalone HTML document for preview tab & HTML file download
+function buildClipboardHtml(bodyHtml) {
   return `<html
   xmlns="http://www.w3.org/1999/xhtml"
   xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -563,17 +547,11 @@ function buildClipboardHtml(bodyHtml) {
 <meta name="ProgId" content="Word.Document"/>
 <meta name="Generator" content="Microsoft Word 15"/>
 <style type="text/css">
-body,p,div,li,td,th{font-family:${font},Arial,sans-serif;font-size:${size};line-height:${spacing};color:#000000;}
-table{border-collapse:collapse;width:${width};}
-td,th{border:1px solid #000;padding:4pt 8pt;}
-th{background:#f2f2f2;font-weight:bold;}
-h1{font-size:1.8em;}h2{font-size:1.4em;}h3{font-size:1.15em;}
+${buildClipboardStyles()}
 </style>
 </head>
 <body>
-<!--StartFragment-->
 ${bodyHtml}
-<!--EndFragment-->
 </body>
 </html>`;
 }
@@ -642,15 +620,6 @@ async function writeWordClipboard(html, plainText) {
 }
 
 function buildSmartPlainText() {
-  // If the entire input is a single equation (e.g. user pasted one plain symbolic formula),
-  // put clean MathML in text/plain so even "Keep Text Only" or Alt+= in Word converts it!
-  if (extractedMaths.length === 1) {
-    const rest = processedCleanedText.replace(extractedMaths[0].placeholder, '').trim();
-    if (!rest) {
-      return getCleanMathML(extractedMaths[0].raw, extractedMaths[0].display);
-    }
-  }
-  // Otherwise replace placeholders with converted LaTeX (never raw broken symbols)
   let plain = processedCleanedText || inputEl.value;
   for (const m of extractedMaths) {
     const esc = m.placeholder.replace(/[.*+?^${}()|[\]\\%]/g, '\\$&');
@@ -659,24 +628,10 @@ function buildSmartPlainText() {
   return plain;
 }
 
-function isSingleStandaloneEquation() {
-  if (extractedMaths.length !== 1) return false;
-  const rest = processedCleanedText.replace(extractedMaths[0].placeholder, '').trim();
-  return !rest || /^[.,;:]$/.test(rest);
-}
-
 async function copyForWord() {
   if (!processedWordOmmlHtml) return;
 
-  // If the entire input is a single equation, copy pure Presentation MathML as text/plain ONLY:
-  // Microsoft Word automatically converts pure MathML text into a native editable Word equation on Ctrl+V!
-  if (isSingleStandaloneEquation()) {
-    const m = extractedMaths[0];
-    const ok = await copyPureMathMLToClipboard(getCleanMathML(m.raw, m.display));
-    if (ok) { showCopySuccess(); return; }
-  }
-
-  const html = buildClipboardHtml(processedWordOmmlHtml);
+  const html = buildClipboardFragment(processedWordOmmlHtml);
   const plain = buildSmartPlainText();
 
   const ok = await writeWordClipboard(html, plain);
@@ -698,13 +653,14 @@ function handlePreviewCopy(e) {
     ? ancestor.closest('.ctd-math[data-math-idx]')
     : (ancestor.parentElement && ancestor.parentElement.closest('.ctd-math[data-math-idx]'));
 
-  // Case 1: User selected inside a single formula in the preview -> pure MathML text/plain for Word!
+  // Case 1: User selected inside a single formula in the preview
   if (enclosingMath) {
     const idx = parseInt(enclosingMath.dataset.mathIdx, 10);
     const m = extractedMaths[idx];
     if (m) {
       e.preventDefault();
-      e.clipboardData.setData('text/plain', getCleanMathML(m.raw, m.display));
+      e.clipboardData.setData('text/html', buildClipboardFragment(renderWordMathML(m.raw, m.display, '')));
+      e.clipboardData.setData('text/plain', m.raw);
       showToast('Формулу скопійовано для Word! Вставте через Ctrl+V.', 'success');
     }
     return;
@@ -732,15 +688,6 @@ function handlePreviewCopy(e) {
 
   let selHtml = tmp.innerHTML;
   let selPlain = tmp.textContent || '';
-  const onlyOneMath = markers.length === 1 && selPlain.replace(markers[0].marker, '').trim() === '';
-
-  if (onlyOneMath) {
-    const m = markers[0].m;
-    e.preventDefault();
-    e.clipboardData.setData('text/plain', getCleanMathML(m.raw, m.display));
-    showToast('Формулу скопійовано для Word! Вставте через Ctrl+V.', 'success');
-    return;
-  }
 
   for (const { marker, m } of markers) {
     const wordMath = renderWordMathML(m.raw, m.display, m.trailingPunct || '');
@@ -749,7 +696,7 @@ function handlePreviewCopy(e) {
   }
 
   e.preventDefault();
-  e.clipboardData.setData('text/html', buildClipboardHtml(selHtml));
+  e.clipboardData.setData('text/html', buildClipboardFragment(selHtml));
   e.clipboardData.setData('text/plain', selPlain);
   showToast('Скопійовано з формулами для Word! Вставте через Ctrl+V.', 'success');
 }
