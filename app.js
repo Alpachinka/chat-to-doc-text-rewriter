@@ -268,23 +268,11 @@ function renderWordPreviewMath(raw, display, trailingPunct = '', idx = -1) {
   return wrapped;
 }
 
-// Native Microsoft Word OMML (<m:oMath> / <m:oMathPara>) for clipboard & Word file
-function renderWordOMML(raw, display, trailingPunct = '') {
-  try {
-    const rawMl = katex.renderToString(raw, {
-      displayMode: display,
-      output: 'mathml',
-      throwOnError: false,
-    });
-    if (typeof window.MathMLToOMML !== 'undefined') {
-      return window.MathMLToOMML.wrapForWordHtml(rawMl, { display, trailingPunct });
-    }
-    const clean = getCleanMathML(raw, display);
-    return display ? `<p style="text-align:center;margin:6pt 0;">${clean}${escapeHtml(trailingPunct)}</p>` : clean;
-  } catch (e) {
-    console.error('[ChatToDoc] OMML render error:', e);
-    return `<span>${escapeHtml(raw)}</span>`;
-  }
+// Clean standalone MathML for Word HTML clipboard & download (NO HTML comments, NO katex span, NO annotation/semantics)
+function renderWordMathML(raw, display, trailingPunct = '') {
+  const clean = getCleanMathML(raw, display);
+  if (display) return `<p style="text-align:center;margin:6pt 0;">${clean}${escapeHtml(trailingPunct)}</p>`;
+  return clean;
 }
 
 // Reinject rendered math back into HTML (replacing placeholders)
@@ -292,15 +280,15 @@ function reinject(html, maths, mode) {
   let out = html;
   maths.forEach(({ placeholder, raw, display, trailingPunct }, idx) => {
     let rendered;
-    if (mode === 'omml') {
-      rendered = renderWordOMML(raw, display, trailingPunct || '');
+    if (mode === 'word') {
+      rendered = renderWordMathML(raw, display, trailingPunct || '');
     } else if (mode === 'mathml') {
       rendered = renderWordPreviewMath(raw, display, trailingPunct || '', idx);
     } else {
       rendered = renderVisual(raw, display, trailingPunct || '', idx);
     }
     const esc = placeholder.replace(/[.*+?^${}()|[\]\\%]/g, '\\$&');
-    if ((mode === 'omml' || mode === 'mathml') && display) {
+    if ((mode === 'word' || mode === 'mathml') && display) {
       out = out.replace(new RegExp(`<p>\\s*${esc}\\s*</p>`, 'g'), () => rendered);
     }
     out = out.replace(new RegExp(esc, 'g'), () => rendered);
@@ -360,8 +348,8 @@ function processInput() {
     // 2. Browser "Вигляд у Word" preview (clean Presentation MathML)
     processedWordPreviewHtml = reinject(safeHtml, maths, 'mathml');
 
-    // 3. Real MS Word clipboard & download HTML (native OMML <m:oMath>)
-    processedWordOmmlHtml = reinject(safeHtml, maths, 'omml');
+    // 3. Clean Word clipboard & download HTML (uncommented <math xmlns="...">)
+    processedWordOmmlHtml = reinject(safeHtml, maths, 'word');
 
     previewRender.innerHTML = processedHtml;
     updateWordPreview();
@@ -492,14 +480,43 @@ function renderEquationsPanel(maths) {
   });
 }
 
+async function copyPureMathMLToClipboard(mathmlStr) {
+  // Writing ONLY text/plain containing pure <math xmlns="http://www.w3.org/1998/Math/MathML">
+  // makes Microsoft Word automatically convert it into a native editable OMML equation on Ctrl+V!
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(mathmlStr);
+      return true;
+    } catch (err) {
+      console.warn('[ChatToDoc] writeText error:', err);
+    }
+  }
+  // Fallback via synchronous copy event (plain text ONLY, no text/html)
+  let copied = false;
+  const onCopy = (e) => {
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', mathmlStr);
+    copied = true;
+  };
+  document.addEventListener('copy', onCopy, { once: true });
+  const dummy = document.createElement('textarea');
+  dummy.value = mathmlStr;
+  dummy.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+  document.body.appendChild(dummy);
+  dummy.select();
+  try { document.execCommand('copy'); } catch {}
+  document.removeEventListener('copy', onCopy);
+  document.body.removeChild(dummy);
+  return copied;
+}
+
 window.copyEqWord = async function(idx) {
   const m = extractedMaths[idx];
   if (!m) return;
   const btn = document.getElementById(`eqwordbtn-${idx}`);
-  const ommlHtml = buildClipboardHtml(renderWordOMML(m.raw, m.display, ''));
   const mathmlPlain = getCleanMathML(m.raw, m.display);
 
-  const ok = await writeWordClipboard(ommlHtml, mathmlPlain);
+  const ok = await copyPureMathMLToClipboard(mathmlPlain);
   if (ok) {
     if (btn) {
       const orig = btn.innerHTML;
@@ -536,18 +553,15 @@ function buildClipboardHtml(bodyHtml) {
   const spacing = settingSpacing.value;
   const width   = settingCols.value === 'auto' ? '100%' : settingCols.value;
 
-  // Exact Microsoft Word HTML schema with OMML namespace (2004/12/omml)
-  // and StartFragment/EndFragment markers for Windows CF_HTML.
-  return `<html xmlns:v="urn:schemas-microsoft-com:vml"
-xmlns:o="urn:schemas-microsoft-com:office:office"
-xmlns:w="urn:schemas-microsoft-com:office:word"
-xmlns:m="http://schemas.microsoft.com/office/2004/12/omml"
-xmlns="http://www.w3.org/TR/REC-html40">
+  return `<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 <meta name="ProgId" content="Word.Document"/>
 <meta name="Generator" content="Microsoft Word 15"/>
-<meta name="Originator" content="Microsoft Word 15"/>
 <style type="text/css">
 body,p,div,li,td,th{font-family:${font},Arial,sans-serif;font-size:${size};line-height:${spacing};color:#000000;}
 table{border-collapse:collapse;width:${width};}
@@ -645,8 +659,23 @@ function buildSmartPlainText() {
   return plain;
 }
 
+function isSingleStandaloneEquation() {
+  if (extractedMaths.length !== 1) return false;
+  const rest = processedCleanedText.replace(extractedMaths[0].placeholder, '').trim();
+  return !rest || /^[.,;:]$/.test(rest);
+}
+
 async function copyForWord() {
   if (!processedWordOmmlHtml) return;
+
+  // If the entire input is a single equation, copy pure Presentation MathML as text/plain ONLY:
+  // Microsoft Word automatically converts pure MathML text into a native editable Word equation on Ctrl+V!
+  if (isSingleStandaloneEquation()) {
+    const m = extractedMaths[0];
+    const ok = await copyPureMathMLToClipboard(getCleanMathML(m.raw, m.display));
+    if (ok) { showCopySuccess(); return; }
+  }
+
   const html = buildClipboardHtml(processedWordOmmlHtml);
   const plain = buildSmartPlainText();
 
@@ -669,13 +698,12 @@ function handlePreviewCopy(e) {
     ? ancestor.closest('.ctd-math[data-math-idx]')
     : (ancestor.parentElement && ancestor.parentElement.closest('.ctd-math[data-math-idx]'));
 
-  // Case 1: User selected inside a single formula in the preview
+  // Case 1: User selected inside a single formula in the preview -> pure MathML text/plain for Word!
   if (enclosingMath) {
     const idx = parseInt(enclosingMath.dataset.mathIdx, 10);
     const m = extractedMaths[idx];
     if (m) {
       e.preventDefault();
-      e.clipboardData.setData('text/html', buildClipboardHtml(renderWordOMML(m.raw, m.display, '')));
       e.clipboardData.setData('text/plain', getCleanMathML(m.raw, m.display));
       showToast('Формулу скопійовано для Word! Вставте через Ctrl+V.', 'success');
     }
@@ -695,7 +723,7 @@ function handlePreviewCopy(e) {
     const idx = parseInt(el.dataset.mathIdx, 10);
     const m = extractedMaths[idx];
     if (!m) return;
-    const marker = `%%COPY_OMML_${k}%%`;
+    const marker = `%%COPY_MATH_${k}%%`;
     markers.push({ marker, m });
     el.replaceWith(document.createTextNode(marker));
   });
@@ -709,15 +737,14 @@ function handlePreviewCopy(e) {
   if (onlyOneMath) {
     const m = markers[0].m;
     e.preventDefault();
-    e.clipboardData.setData('text/html', buildClipboardHtml(renderWordOMML(m.raw, m.display, '')));
     e.clipboardData.setData('text/plain', getCleanMathML(m.raw, m.display));
     showToast('Формулу скопійовано для Word! Вставте через Ctrl+V.', 'success');
     return;
   }
 
   for (const { marker, m } of markers) {
-    const omml = renderWordOMML(m.raw, m.display, m.trailingPunct || '');
-    selHtml = selHtml.replace(marker, () => omml);
+    const wordMath = renderWordMathML(m.raw, m.display, m.trailingPunct || '');
+    selHtml = selHtml.replace(marker, () => wordMath);
     selPlain = selPlain.replace(marker, () => m.raw);
   }
 

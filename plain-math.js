@@ -98,38 +98,49 @@
     'true', 'false', 'null', 'var', 'let', 'const', 'end', 'new', 'old', 'all',
   ]);
 
-  // Known Cyrillic physical/SI units
+  // Known Cyrillic physical/SI units (base + SI prefixes)
   const CYR_UNITS = new Set([
-    'км', 'м', 'дм', 'см', 'мм', 'мкм', 'нм', 'га', 'ар',
+    'км', 'м', 'дм', 'см', 'мм', 'мкм', 'нм', 'пм', 'га', 'ар',
     'т', 'ц', 'кг', 'г', 'мг', 'мкг',
-    'с', 'мс', 'мкс', 'нс', 'хв', 'мин', 'год', 'ч', 'діб', 'сут',
-    'Н', 'кН', 'МН', 'мН',
-    'Дж', 'кДж', 'МДж', 'мДж', 'кал', 'ккал', 'еВ', 'эВ', 'кеВ', 'МеВ',
-    'Вт', 'кВт', 'МВт', 'ГВт', 'мВт', 'кВА', 'ВА',
-    'В', 'кВ', 'МВ', 'мВ', 'мкВ',
-    'А', 'кА', 'мА', 'мкА',
-    'Ом', 'кОм', 'МОм', 'мОм',
-    'Гц', 'кГц', 'МГц', 'ГГц',
-    'Па', 'кПа', 'МПа', 'ГПа', 'бар', 'мбар', 'атм',
-    'К', 'град', 'рад', 'ср',
-    'моль', 'ммоль', 'кмоль',
-    'л', 'мл', 'мкл',
-    'Кл', 'мКл', 'мкКл', 'Ф', 'мФ', 'мкФ', 'нФ', 'пФ',
-    'Гн', 'мГн', 'мкГн', 'Тл', 'мТл', 'Вб', 'лм', 'лк', 'Бк', 'Гр', 'Зв',
-    'дБ', 'об', 'шт', 'грн',
+    'с', 'мс', 'мкс', 'нс', 'пс', 'хв', 'мин', 'год', 'ч', 'діб', 'сут',
+    'Н', 'кН', 'МН', 'ГН', 'мН',
+    'Дж', 'кДж', 'МДж', 'ГДж', 'ТДж', 'мДж', 'мкДж', 'кал', 'ккал', 'Мкал',
+    'еВ', 'эВ', 'кеВ', 'МеВ', 'ГеВ', 'кэВ', 'МэВ', 'ГэВ',
+    'Вт', 'кВт', 'МВт', 'ГВт', 'ТВт', 'мВт', 'мкВт', 'нВт',
+    'ВА', 'кВА', 'МВА', 'ГВА', 'вар', 'Вар', 'квар', 'кВар', 'Мвар', 'МВар',
+    'В', 'кВ', 'МВ', 'ГВ', 'мВ', 'мкВ', 'нВ',
+    'А', 'кА', 'МА', 'мА', 'мкА', 'нА',
+    'Ом', 'кОм', 'МОм', 'ГОм', 'мОм', 'мкОм', 'См', 'мСм', 'мкСм',
+    'Гц', 'кГц', 'МГц', 'ГГц', 'ТГц',
+    'Па', 'кПа', 'МПа', 'ГПа', 'мПа', 'бар', 'мбар', 'атм',
+    'К', 'град', 'рад', 'мрад', 'ср',
+    'моль', 'ммоль', 'кмоль', 'мкмоль',
+    'л', 'мл', 'мкл', 'дл', 'кл',
+    'Кл', 'кКл', 'мКл', 'мкКл', 'нКл', 'пКл',
+    'Ф', 'мФ', 'мкФ', 'нФ', 'пФ',
+    'Гн', 'мГн', 'мкГн', 'нГн',
+    'Тл', 'мТл', 'мкТл', 'Вб', 'мВб', 'мкВб',
+    'лм', 'клм', 'Млм', 'млм', 'лк', 'клк', 'Млк', 'млк', 'кд', 'ккд', 'мкд',
+    'Бк', 'кБк', 'МБк', 'ГБк', 'Гр', 'мГр', 'Зв', 'мЗв', 'мкЗв',
+    'дБ', 'об', 'шт', 'грн', 'біт', 'кбіт', 'Мбіт', 'Гбіт', 'байт', 'КБ', 'МБ', 'ГБ', 'ТБ',
   ]);
 
   // Multi-letter Latin units (safe after space + number)
   const LAT_MULTI_UNITS = new Set([
-    'km', 'dm', 'cm', 'mm', 'nm', 'um', 'ha',
+    'km', 'dm', 'cm', 'mm', 'nm', 'um', 'pm', 'ha',
     'kg', 'mg', 'ug',
-    'ms', 'us', 'ns', 'min', 'hr',
-    'kN', 'MN', 'mN', 'kJ', 'MJ', 'mJ', 'eV', 'keV', 'MeV', 'cal', 'kcal',
-    'kW', 'MW', 'GW', 'mW', 'kVA', 'VA',
-    'kV', 'MV', 'mV', 'mA', 'uA', 'kA',
-    'Ohm', 'kOhm', 'MOhm', 'Hz', 'kHz', 'MHz', 'GHz',
+    'ms', 'us', 'ns', 'ps', 'min', 'hr',
+    'kN', 'MN', 'GN', 'mN', 'kJ', 'MJ', 'GJ', 'mJ', 'uJ',
+    'eV', 'keV', 'MeV', 'GeV', 'cal', 'kcal', 'Mcal',
+    'kW', 'MW', 'GW', 'TW', 'mW', 'uW', 'kVA', 'MVA', 'VA', 'var', 'kvar', 'Mvar',
+    'kV', 'MV', 'mV', 'uV', 'mA', 'uA', 'nA', 'kA',
+    'Ohm', 'kOhm', 'MOhm', 'GOhm', 'mOhm',
+    'Hz', 'kHz', 'MHz', 'GHz', 'THz',
     'Pa', 'kPa', 'MPa', 'GPa', 'bar', 'mbar', 'atm',
-    'rad', 'deg', 'mol', 'mmol', 'mL', 'dB', 'rpm', 'Wb', 'lm', 'lx',
+    'rad', 'mrad', 'deg', 'mol', 'mmol', 'kmol', 'mL', 'uL', 'dL',
+    'dB', 'rpm', 'Wb', 'mWb', 'lm', 'klm', 'Mlm', 'lx', 'klx', 'cd', 'kcd',
+    'mF', 'uF', 'nF', 'pF', 'mH', 'uH', 'nH', 'mT', 'uT', 'mC', 'uC', 'nC',
+    'KB', 'MB', 'GB', 'TB', 'kbps', 'Mbps', 'Gbps',
   ]);
 
   // Single-letter Latin units (only safe after space + number when followed by /, sup, or end/rel/punct)
@@ -142,7 +153,10 @@
   const CYR_HOMOGLYPHS = {
     'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H',
     'К': 'K', 'М': 'M', 'О': 'O', 'Р': 'P', 'Т': 'T', 'Х': 'X', 'І': 'I',
+    'Ф': '\\Phi',
   };
+
+  const CYR_LOWER_RE = /[а-яіїєґ]/;
 
   const CYR_CHAR_RE = /[а-яА-ЯіІїЇєЄґҐ]/;
   const LAT_CHAR_RE = /[A-Za-z]/;
@@ -347,11 +361,14 @@
         i = j; continue;
       }
 
-      // 14. Greek letters (optionally followed by digits subscript like φ1)
+      // 14. Greek letters (optionally followed by Σ or digits subscript like ΦΣ, φ1)
       if (isGreek(ch)) {
         let j = i + 1;
         let sub = null;
-        if (j < n && isDigit(input[j])) {
+        if (j < n && input[j] === 'Σ' && ch !== 'Σ') {
+          sub = '\\Sigma';
+          j++;
+        } else if (j < n && isDigit(input[j])) {
           const dStart = j;
           while (j < n && isDigit(input[j])) j++;
           sub = input.slice(dStart, j);
@@ -489,7 +506,19 @@
           i = wEnd; continue;
         }
 
-        // 20. Single Latin variable optionally followed by digits (e.g., R2, x1, v0, m1)
+        // 20. Single Latin variable optionally followed by Σ or digits (e.g., PΣ, R2, x1, v0, m1)
+        if (i + 1 < n && input[i + 1] === 'Σ') {
+          tokens.push({
+            type: 'IDENT',
+            val: input.slice(i, i + 2),
+            base: ch,
+            sub: '\\Sigma',
+            start,
+            end: i + 2,
+            hadSpace,
+          });
+          i += 2; continue;
+        }
         if (i + 1 < n && isDigit(input[i + 1])) {
           let j = i + 1;
           while (j < n && isDigit(input[j])) j++;
@@ -558,28 +587,52 @@
         }
       }
 
-      // 23b. Single Cyrillic homoglyph variable (e.g., Р = U · I, С = 2πR, А1 = ...)
+      // 23b. Cyrillic homoglyph variable (e.g., ФΣ = ..., Ен · S, Рзаг = ..., Р = U · I, С = 2πR, А1 = ...)
       if (Object.prototype.hasOwnProperty.call(CYR_HOMOGLYPHS, ch) &&
-          !(i + 1 < n && (isCyr(input[i + 1]) || isLat(input[i + 1])))) {
-        const nextNS = skipSpaces(input, i + 1);
+          !(i + 1 < n && isLat(input[i + 1]))) {
+        let j = i + 1;
+        let sub = null;
+        let hasCyrSub = false;
+
+        if (j < n && input[j] === 'Σ') {
+          sub = '\\Sigma';
+          j++;
+        } else if (j < n && isDigit(input[j])) {
+          const dStart = j;
+          while (j < n && isDigit(input[j])) j++;
+          sub = input.slice(dStart, j);
+        } else if (j < n && CYR_LOWER_RE.test(input[j])) {
+          // Potential Cyrillic subscript after uppercase homoglyph (e.g., Ен, Рзаг, Фзаг, Акор)
+          let k = j;
+          while (k < n) {
+            if (CYR_LOWER_RE.test(input[k])) k++;
+            else if ((input[k] === '.' || input[k] === '-') && k + 1 < n && CYR_LOWER_RE.test(input[k + 1])) k++;
+            else break;
+          }
+          // Only accept if not followed by uppercase/other Cyrillic and length <= 8
+          if (k > j && k - j <= 8 && (k >= n || !isCyr(input[k]))) {
+            hasCyrSub = true;
+            sub = `\\text{${input.slice(j, k)}}`;
+            j = k;
+          }
+        }
+
+        const nextNS = skipSpaces(input, j);
         const nextCh = nextNS < n ? input[nextNS] : '';
         const prevIsOp = prev && (
           prev.type === 'REL' || prev.type === 'ADD' || prev.type === 'MUL' ||
           prev.type === 'DIV' || prev.type === 'LPAREN' || prev.type === 'POW'
         );
-        const nextIsMath = (
-          (i + 1 < n && (isDigit(input[i + 1]) || isSup(input[i + 1]) || isSub(input[i + 1]) || input[i + 1] === '_' || input[i + 1] === '^')) ||
+        const nextIsStrongMath = (
+          (j < n && (isSup(input[j]) || isSub(input[j]) || input[j] === '_' || input[j] === '^')) ||
           Object.prototype.hasOwnProperty.call(REL_MAP, nextCh) ||
-          nextCh === '·' || nextCh === '⋅' || nextCh === '×' || nextCh === '/' || nextCh === '÷' || nextCh === '+' || nextCh === '-' || nextCh === '−'
+          nextCh === '·' || nextCh === '⋅' || nextCh === '×' || nextCh === '/' || nextCh === '÷' ||
+          nextCh === '+' || nextCh === '-' || nextCh === '−' || (prevIsOp && nextCh === ')')
         );
-        if (prevIsOp || nextIsMath) {
-          let j = i + 1;
-          let sub = null;
-          if (j < n && isDigit(input[j])) {
-            const dStart = j;
-            while (j < n && isDigit(input[j])) j++;
-            sub = input.slice(dStart, j);
-          }
+        const nextIsMath = nextIsStrongMath || (sub === '\\Sigma') || (sub && !hasCyrSub);
+
+        if ((hasCyrSub && (prevIsOp || nextIsStrongMath)) ||
+            (!hasCyrSub && !(i + 1 < n && isCyr(input[i + 1])) && (prevIsOp || nextIsMath))) {
           tokens.push({
             type: 'IDENT',
             val: input.slice(i, j),
